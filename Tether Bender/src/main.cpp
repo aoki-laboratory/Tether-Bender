@@ -48,6 +48,13 @@ int power2 = 0;
 int power3 = 0;
 int power4 = 0;
 
+int pattern = 0;
+int iP, iD, iI;
+int kp = 20;
+int ki = 15;
+int kd = 100;
+float iBefore;
+
 // Timer
 hw_timer_t * timer = NULL;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
@@ -62,11 +69,14 @@ void taskInit();
 void button_action();
 void IRAM_ATTR onTimer(void);
 void Timer_Interrupt(void);
+void servoControl(float ang);
 
 //Setup #1
 //------------------------------------------------------------------//
 void setup() {
   M5.begin();
+
+  Serial.begin(115200);
 
   delay(500);
 
@@ -77,7 +87,7 @@ void setup() {
   timerAlarmEnable(timer); 
 
   M5.Lcd.setTextColor(BLACK);
-  
+
   taskInit();
   init_can();
 }
@@ -89,7 +99,37 @@ void loop() {
   test_can(); 
   M5.update();
   button_action(); 
-  delay(20);
+
+  switch (pattern) {
+  case 0:
+    break;
+  
+  case 11:
+    servoControl(0);
+    if(velocity > -1 &&velocity <= 1) {
+      if(angle > -0.5 && angle < 0.5) {
+        pattern = 12;
+        iI = 0;
+        break;
+      }
+    }    
+    break;
+
+  case 12:
+    delay(3000);
+    power1 = 1000;
+    pattern = 13;
+    break;
+
+  case 13:
+    if(angle >= 120) {
+      power1 = 0;
+      pattern = 0;
+    }
+    break;
+
+  }
+  delay(1);
 }
 
 // Timer Interrupt
@@ -99,7 +139,54 @@ void Timer_Interrupt( void ){
     portENTER_CRITICAL(&timerMux);
     interruptCounter--;
     portEXIT_CRITICAL(&timerMux);
+
+    if(pattern == 13 && power1 < 30000) {
+      M5.Lcd.setTextSize(3);
+      M5.Lcd.setCursor(220, 40);
+      M5.Lcd.setTextColor(TFT_DARKGREY);
+      M5.Lcd.printf("%4d",power1);
+      power1+=5;
+      M5.Lcd.setCursor(220, 40);
+      M5.Lcd.setTextColor(WHITE);
+      M5.Lcd.printf("%4d",power1);
+    }
+
+    iTimer10++;
+    switch (iTimer10) {
+    case 1:
+      break;
+    case 10:
+      iTimer10 = 0;
+      break;
+    }
   }
+}
+
+// ServoControl
+//------------------------------------------------------------------//
+void servoControl(float ang){
+  float i;
+  int iRet, dt, preTime;
+
+  dt = (micros() - preTime) / 1000000;
+  preTime = micros();
+
+  i = ang - angle;
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(180, 40);
+  M5.Lcd.setTextColor(TFT_DARKGREY);
+  M5.Lcd.printf("%4d",iI);
+  iP = kp * i;
+  iI += ki * i;
+  iD = kd * (i - iBefore);
+  iRet = iP + iI + iD;
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(180, 40);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.printf("%4d",iI);
+  if( iRet > 30000 ) iRet = 30000;
+  if( iRet < -30000 ) iRet = -30000;
+  power1 = iRet;  
 }
 
 // IRAM
@@ -187,7 +274,7 @@ void test_can(){
       M5.Lcd.setCursor(80, 190);
       M5.Lcd.printf("temp %3d", temp);
       angle_buff = ((angle_H << 8) | angle_L & 0xFF);
-      angle = (float)angle_buff * 360/8192;
+      angle = (float)angle_buff * 360/8192-180;
       velocity = ((velocity_H << 8) | velocity_L & 0xFF);
       torque = ((torque_H << 8) | torque_L & 0xFF)*741/1000;
       temp = temp_L;
@@ -203,7 +290,14 @@ void test_can(){
       M5.Lcd.printf("Torque %5d", torque);
       M5.Lcd.setTextSize(2);
       M5.Lcd.setCursor(80, 190);
-      M5.Lcd.printf("temp %3d", temp);     
+      M5.Lcd.printf("temp %3d", temp);  
+      Serial.print(angle); 
+      Serial.print(", ");   
+      Serial.print(velocity); 
+      Serial.print(", ");   
+      Serial.print(torque); 
+      Serial.print(", ");   
+      Serial.println(temp); 
     
   }
 }
@@ -249,7 +343,7 @@ void taskInit() {
 // Button Action
 //------------------------------------------------------------------//
 void button_action() {
-  if (M5.BtnA.wasPressed()) {
+  if (M5.BtnA.wasPressed() && pattern == 0) {
     M5.Lcd.setTextSize(3);
     M5.Lcd.setCursor(220, 40);
     M5.Lcd.setTextColor(TFT_DARKGREY);
@@ -263,5 +357,7 @@ void button_action() {
     M5.Lcd.setTextColor(WHITE);
     M5.Lcd.printf("%4d",power1);
   } else if (M5.BtnB.wasPressed()) {    
+  } else if (M5.BtnC.wasPressed() && pattern == 0) {    
+    pattern = 11;
   }
 } 
