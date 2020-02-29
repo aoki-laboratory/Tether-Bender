@@ -1,9 +1,26 @@
+//------------------------------------------------------------------//
+//Supported MCU:   ESP32 (M5Stack)
+//File Contents:   Tether Bender
+//Version number:  Ver.1.0
+//Date:            2020/02/29
+//------------------------------------------------------------------//
+ 
+//This program supports the following boards:
+//* M5Stack(Grey version)
+ 
+//Include
+//------------------------------------------------------------------//
 #include <M5Stack.h>
 #include <mcp_can.h>
 
-#define CAN0_INT 15                              // Set INT to pin 2
+//Define
+//------------------------------------------------------------------//
+#define CAN0_INT 15                             // Set INT to pin 15
+#define TIMER_INTERRUPT 10
 
-MCP_CAN CAN0(12);                               // Set CS to pin 10
+//Global
+//------------------------------------------------------------------//
+MCP_CAN CAN0(12);                               // Set CS to pin 12
 
 byte data[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
@@ -31,25 +48,46 @@ int power2 = 0;
 int power3 = 0;
 int power4 = 0;
 
+TaskHandle_t task_handl;
+
+// Timer
+hw_timer_t * timer = NULL;
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+volatile int interruptCounter;
+int iTimer10;
+
+//Prototype
+//------------------------------------------------------------------//
 void init_can();
 void test_can();
 void taskInit();
 void button_action();
+void taskDisplay(void *pvParameters);
 
+//Setup #1
+//------------------------------------------------------------------//
 void setup() {
   M5.begin();
 
+  xTaskCreatePinnedToCore(&taskDisplay, "taskDisplay", 6144, NULL, 10, &task_handl, 0);
   delay(500);
+
+  // Initialize Timer Interrupt
+  timer = timerBegin(0, 80, true);
+  timerAttachInterrupt(timer, &onTimer, true);
+  timerAlarmWrite(timer, TIMER_INTERRUPT * 1000, true);
+  timerAlarmEnable(timer); 
+
   M5.Lcd.setTextColor(BLACK);
 
   init_can();
-  taskInit();
 }
 
+//Main #1
+//------------------------------------------------------------------//
 void loop() {
+  Timer_Interrupt(); 
   test_can();
-  M5.update();
-  button_action();
   data[0] = power1 >> 8 & 0xFF;
   data[1] = power1 & 0xFF;
   data[2] = power2 >> 8 & 0xFF;
@@ -62,6 +100,37 @@ void loop() {
   delay(20);
 }
 
+//Main #0
+//------------------------------------------------------------------//
+void taskDisplay(void *pvParameters){
+  taskInit(); 
+  while(1){   
+    M5.update();
+    button_action();
+  }
+}
+
+// Timer Interrupt
+//------------------------------------------------------------------//
+void Timer_Interrupt( void ){
+  if (interruptCounter > 0) {
+    portENTER_CRITICAL(&timerMux);
+    interruptCounter--;
+    portEXIT_CRITICAL(&timerMux);
+    
+  }
+}
+
+// IRAM
+//------------------------------------------------------------------//
+void IRAM_ATTR onTimer() {
+  portENTER_CRITICAL_ISR(&timerMux);
+  interruptCounter=1;
+  portEXIT_CRITICAL_ISR(&timerMux);
+}
+
+// Initialize CAN
+//------------------------------------------------------------------//
 void init_can(){
   M5.Lcd.setTextSize(1);
   M5.Lcd.setCursor(0, 10);
@@ -79,6 +148,8 @@ void init_can(){
 
 }
 
+// Test CAN
+//------------------------------------------------------------------//
 void test_can(){
   if(!digitalRead(CAN0_INT)) // If CAN0_INT pin is low, read receive buffer
   {
@@ -148,6 +219,8 @@ void test_can(){
   }
 }
 
+// Initialize Task
+//------------------------------------------------------------------//
 void taskInit() {
   M5.Lcd.fillRect(0, 0, 320, 20, TFT_WHITE);
   M5.Lcd.fillRect(60, 20, 260, 60, TFT_DARKGREY);
@@ -184,6 +257,8 @@ void taskInit() {
   M5.Lcd.printf("%2d", 1);
 }
 
+// Button Action
+//------------------------------------------------------------------//
 void button_action() {
   if (M5.BtnA.wasPressed()) {
     M5.Lcd.setTextSize(3);
