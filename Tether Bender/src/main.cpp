@@ -1,54 +1,70 @@
 #include <M5Stack.h>
 #include <mcp_can.h>
 
-/**
- * variable for loop
- */
+#define CAN0_INT 15                              // Set INT to pin 2
 
-byte data[8] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+MCP_CAN CAN0(12);                               // Set CS to pin 10
 
+byte data[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
-/**
- * variable for CAN
- */
 long unsigned int rxId;
 unsigned char len = 0;
 unsigned char rxBuf[8];
 char msgString[128];                        // Array to store serial string
 
-#define CAN0_INT 15                              // Set INT to pin 2
-MCP_CAN CAN0(12);                               // Set CS to pin 10
+byte angle_H;
+byte angle_L;
+byte velocity_H;
+byte velocity_L;
+byte torque_H;
+byte torque_L;
+byte temp_L;
+
+unsigned short angle_buff;
+float angle;
+short velocity;
+short torque;
+int8_t temp;
+
+int power1 = 0;
+int power2 = 0;
+int power3 = 0;
+int power4 = 0;
 
 void init_can();
 void test_can();
+void taskInit();
+void button_action();
 
 void setup() {
   M5.begin();
 
-  M5.Lcd.fillScreen(WHITE);
   delay(500);
   M5.Lcd.setTextColor(BLACK);
-  // M5.Lcd.setTextSize(1);
 
   init_can();
+  taskInit();
 }
 
 void loop() {
-  if(M5.BtnA.wasPressed())
-  {
-    M5.Lcd.clear();
-    M5.Lcd.printf("CAN Test A!\n");
-    M5.Lcd.fillScreen(WHITE);
-    init_can();
-  }
   test_can();
   M5.update();
+  button_action();
+  data[0] = power1 >> 8 & 0xFF;
+  data[1] = power1 & 0xFF;
+  data[2] = power2 >> 8 & 0xFF;
+  data[3] = power2 & 0xFF;
+  data[4] = power3 >> 8 & 0xFF;
+  data[5] = power3 & 0xFF;
+  data[6] = power4 >> 8 & 0xFF;
+  data[7] = power4 & 0xFF;
+  CAN0.sendMsgBuf(0x1FF, 0, 8, data);
+  delay(20);
 }
 
 void init_can(){
   M5.Lcd.setTextSize(1);
   M5.Lcd.setCursor(0, 10);
-  M5.Lcd.fillScreen(WHITE);
   delay(500);
 
   M5.Lcd.printf("CAN Test A!\n");
@@ -68,15 +84,120 @@ void test_can(){
   {
     CAN0.readMsgBuf(&rxId, &len, rxBuf); // Read data: len = data length, buf = data byte(s)
   
-    if((rxId & 0x40000000) == 0x40000000){    // Determine if message is a remote request frame.
-      sprintf(msgString, " REMOTE REQUEST FRAME");
-      Serial.print(msgString);
-    } else {
       for(byte i = 0; i<len; i++){
-        sprintf(msgString, " 0x%.2X", rxBuf[i]);
-        M5.Lcd.printf(msgString);
+        //sprintf(msgString, " 0x%.2X", rxBuf[i]);
+        //M5.Lcd.printf(msgString);
+        switch (i) {
+        case 0:
+          angle_H = rxBuf[i];
+          break;
+        case 1:
+          angle_L = rxBuf[i];
+          break;
+        case 2:
+          velocity_H = rxBuf[i];
+          break;
+        case 3:
+          velocity_L = rxBuf[i];
+          break;
+        case 4:
+          torque_H = rxBuf[i];
+          break;
+        case 5:
+          torque_L = rxBuf[i];
+          break;
+        case 6:
+          temp_L = rxBuf[i];
+          break;
+        case 7:
+          break;
+        }
       }
-    }
-    M5.Lcd.printf("\n");
+      M5.Lcd.setTextColor(BLACK);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(80, 100);
+      M5.Lcd.printf("Roter Angle %3.2f", angle);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(80, 130);
+      M5.Lcd.printf("Velocity %4d", velocity);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(80, 160);
+      M5.Lcd.printf("Torque %5d", torque);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(80, 190);
+      M5.Lcd.printf("temp %3d", temp);
+      angle_buff = ((angle_H << 8) | angle_L & 0xFF);
+      angle = (float)angle_buff * 360/8192;
+      velocity = ((velocity_H << 8) | velocity_L & 0xFF);
+      torque = ((torque_H << 8) | torque_L & 0xFF)*741/1000;
+      temp = temp_L;
+      M5.Lcd.setTextColor(WHITE);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(80, 100);
+      M5.Lcd.printf("Roter Angle %3.2f", angle);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(80, 130);
+      M5.Lcd.printf("Velocity %4d", velocity);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(80, 160);
+      M5.Lcd.printf("Torque %5d", torque);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(80, 190);
+      M5.Lcd.printf("temp %3d", temp);     
+    
   }
 }
+
+void taskInit() {
+  M5.Lcd.fillRect(0, 0, 320, 20, TFT_WHITE);
+  M5.Lcd.fillRect(60, 20, 260, 60, TFT_DARKGREY);
+  M5.Lcd.fillRect(0, 80, 60, 160, TFT_DARKGREY);
+  M5.Lcd.fillRect(0, 20, 60, 60, TFT_LIGHTGREY);
+  M5.Lcd.fillRect(0, 220, 320, 20, TFT_WHITE);
+
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setCursor(8, 2);
+  M5.Lcd.setTextColor(BLACK);
+  M5.Lcd.print("Tether Bender V1");
+  M5.Lcd.setCursor(40, 222);
+  M5.Lcd.print("ROTA");
+  M5.Lcd.setCursor(140, 222);
+  M5.Lcd.print("MODE");
+  M5.Lcd.setCursor(228, 222);
+  M5.Lcd.print("SEAQ");
+  M5.Lcd.setTextSize(4);
+  M5.Lcd.setCursor(8, 36);
+  M5.Lcd.setTextColor(BLACK);
+  M5.Lcd.print("TB");
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(80, 40);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.printf("Power");
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.setCursor(8, 110);
+  M5.Lcd.print("No.");
+
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.setTextSize(5);
+  M5.Lcd.setCursor(0, 150);
+  M5.Lcd.printf("%2d", 1);
+}
+
+void button_action() {
+  if (M5.BtnA.wasPressed()) {
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setCursor(220, 40);
+    M5.Lcd.setTextColor(TFT_DARKGREY);
+    M5.Lcd.printf("%4d",power1);
+    power1+=1000;
+    if( power1 > 30000 ) {
+      power1 = 0;
+    }
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setCursor(220, 40);
+    M5.Lcd.setTextColor(WHITE);
+    M5.Lcd.printf("%4d",power1);
+  } else if (M5.BtnB.wasPressed()) {    
+  }
+} 
