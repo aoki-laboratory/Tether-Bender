@@ -48,8 +48,6 @@ int power2 = 0;
 int power3 = 0;
 int power4 = 0;
 
-TaskHandle_t task_handl;
-
 // Timer
 hw_timer_t * timer = NULL;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
@@ -62,14 +60,14 @@ void init_can();
 void test_can();
 void taskInit();
 void button_action();
-void taskDisplay(void *pvParameters);
+void IRAM_ATTR onTimer(void);
+void Timer_Interrupt(void);
 
 //Setup #1
 //------------------------------------------------------------------//
 void setup() {
   M5.begin();
 
-  xTaskCreatePinnedToCore(&taskDisplay, "taskDisplay", 6144, NULL, 10, &task_handl, 0);
   delay(500);
 
   // Initialize Timer Interrupt
@@ -79,7 +77,8 @@ void setup() {
   timerAlarmEnable(timer); 
 
   M5.Lcd.setTextColor(BLACK);
-
+  
+  taskInit();
   init_can();
 }
 
@@ -87,27 +86,10 @@ void setup() {
 //------------------------------------------------------------------//
 void loop() {
   Timer_Interrupt(); 
-  test_can();
-  data[0] = power1 >> 8 & 0xFF;
-  data[1] = power1 & 0xFF;
-  data[2] = power2 >> 8 & 0xFF;
-  data[3] = power2 & 0xFF;
-  data[4] = power3 >> 8 & 0xFF;
-  data[5] = power3 & 0xFF;
-  data[6] = power4 >> 8 & 0xFF;
-  data[7] = power4 & 0xFF;
-  CAN0.sendMsgBuf(0x1FF, 0, 8, data);
+  test_can(); 
+  M5.update();
+  button_action(); 
   delay(20);
-}
-
-//Main #0
-//------------------------------------------------------------------//
-void taskDisplay(void *pvParameters){
-  taskInit(); 
-  while(1){   
-    M5.update();
-    button_action();
-  }
 }
 
 // Timer Interrupt
@@ -117,7 +99,6 @@ void Timer_Interrupt( void ){
     portENTER_CRITICAL(&timerMux);
     interruptCounter--;
     portEXIT_CRITICAL(&timerMux);
-    
   }
 }
 
@@ -136,9 +117,6 @@ void init_can(){
   M5.Lcd.setCursor(0, 10);
   delay(500);
 
-  M5.Lcd.printf("CAN Test A!\n");
-  M5.Lcd.printf("Receive first, then testing for sending function!\n");
-
   // Initialize MCP2515 running at 16MHz with a baudrate of 500kb/s and the masks and filters disabled.
   CAN0.begin(MCP_ANY, CAN_1000KBPS, MCP_8MHZ);
 
@@ -151,6 +129,17 @@ void init_can(){
 // Test CAN
 //------------------------------------------------------------------//
 void test_can(){
+
+  data[0] = power1 >> 8 & 0xFF;
+  data[1] = power1 & 0xFF;
+  data[2] = power2 >> 8 & 0xFF;
+  data[3] = power2 & 0xFF;
+  data[4] = power3 >> 8 & 0xFF;
+  data[5] = power3 & 0xFF;
+  data[6] = power4 >> 8 & 0xFF;
+  data[7] = power4 & 0xFF;
+  CAN0.sendMsgBuf(0x1FF, 0, 8, data);
+
   if(!digitalRead(CAN0_INT)) // If CAN0_INT pin is low, read receive buffer
   {
     CAN0.readMsgBuf(&rxId, &len, rxBuf); // Read data: len = data length, buf = data byte(s)
