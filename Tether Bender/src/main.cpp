@@ -50,8 +50,8 @@ int power4 = 0;
 
 int pattern = 0;
 int iP, iD, iI;
-int kp = 20;
-int ki = 15;
+int kp = 25;
+int ki = 10;
 int kd = 100;
 float iBefore;
 
@@ -107,7 +107,7 @@ void loop() {
   case 11:
     servoControl(0);
     if(velocity > -1 &&velocity <= 1) {
-      if(angle > -0.5 && angle < 0.5) {
+      if(angle > -0.1 && angle < 0.1) {
         pattern = 12;
         iI = 0;
         break;
