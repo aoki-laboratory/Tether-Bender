@@ -18,6 +18,11 @@
 #define CAN0_INT 15                             // Set INT to pin 15
 #define TIMER_INTERRUPT 10
 
+#define HX711_DOUT  5
+#define HX711_SCLK  2
+#define OUT_VOL     0.0007f
+#define LOAD        500.0f
+
 //Global
 //------------------------------------------------------------------//
 MCP_CAN CAN0(12);                               // Set CS to pin 12
@@ -40,7 +45,8 @@ byte temp_L;
 unsigned short angle_buff;
 float angle;
 short velocity;
-short torque;
+int torque_buff;
+float torque;
 int8_t temp;
 
 int power1 = 0;
@@ -54,6 +60,11 @@ int kp = 25;
 int ki = 10;
 int kd = 100;
 float iBefore;
+
+// HX711
+float hx711_offset;
+float hx711_data;
+
 
 // Timer
 hw_timer_t * timer = NULL;
@@ -70,6 +81,11 @@ void button_action();
 void IRAM_ATTR onTimer(void);
 void Timer_Interrupt(void);
 void servoControl(float ang);
+void AE_HX711_Init(void);
+void AE_HX711_Reset(void);
+long AE_HX711_Read(void);
+long AE_HX711_Averaging(long adc,char num);
+float AE_HX711_getGram(char num);
 
 //Setup #1
 //------------------------------------------------------------------//
@@ -87,6 +103,10 @@ void setup() {
   timerAlarmEnable(timer); 
 
   M5.Lcd.setTextColor(BLACK);
+
+  AE_HX711_Init();
+  AE_HX711_Reset();
+  hx711_offset = AE_HX711_getGram(30); 
 
   taskInit();
   init_can();
@@ -141,21 +161,40 @@ void Timer_Interrupt( void ){
     portEXIT_CRITICAL(&timerMux);
 
     if(pattern == 13 && power1 < 30000) {
+      power1+=1;
       M5.Lcd.setTextSize(3);
       M5.Lcd.setCursor(220, 40);
-      M5.Lcd.setTextColor(TFT_DARKGREY);
-      M5.Lcd.printf("%4d",power1);
-      power1+=5;
-      M5.Lcd.setCursor(220, 40);
-      M5.Lcd.setTextColor(WHITE);
+      M5.Lcd.setTextColor(WHITE, TFT_DARKGREY);
       M5.Lcd.printf("%4d",power1);
     }
+
+    hx711_data = (AE_HX711_getGram(1) - hx711_offset)*-1;  
+    Serial.print(angle); 
+    Serial.print(", ");   
+    Serial.print(velocity); 
+    Serial.print(", ");   
+    Serial.print(torque); 
+    Serial.print(", ");   
+    Serial.print(hx711_data/2); 
+    Serial.print(", ");   
+    Serial.println(temp); 
+    
 
     iTimer10++;
     switch (iTimer10) {
     case 1:
+      M5.Lcd.setTextColor(WHITE, BLACK);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(80, 160);
+      M5.Lcd.printf("HX711 %5.2f", hx711_data);
+      M5.Lcd.setCursor(80, 190);
+      M5.Lcd.printf("HXTorque %5.2f", hx711_data/2);
+      break;
+    case 5:
+      
       break;
     case 10:
+      
       iTimer10 = 0;
       break;
     }
@@ -260,44 +299,26 @@ void test_can(){
           break;
         }
       }
-      M5.Lcd.setTextColor(BLACK);
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.setCursor(80, 100);
-      M5.Lcd.printf("Roter Angle %3.2f", angle);
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.setCursor(80, 130);
-      M5.Lcd.printf("Velocity %4d", velocity);
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.setCursor(80, 160);
-      M5.Lcd.printf("Torque %5d", torque);
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.setCursor(80, 190);
-      M5.Lcd.printf("temp %3d", temp);
       angle_buff = ((angle_H << 8) | angle_L & 0xFF);
       angle = (float)angle_buff * 360/8192-180;
       velocity = ((velocity_H << 8) | velocity_L & 0xFF);
-      torque = ((torque_H << 8) | torque_L & 0xFF)*741/1000;
+      torque_buff = ((torque_H << 8) | torque_L & 0xFF)*741/1000;
+      if( torque_buff > -20000 && torque_buff < 20000 ) {
+        torque = float(torque_buff) / 10;
+      }
       temp = temp_L;
-      M5.Lcd.setTextColor(WHITE);
+      M5.Lcd.setTextColor(WHITE, BLACK);
       M5.Lcd.setTextSize(2);
       M5.Lcd.setCursor(80, 100);
-      M5.Lcd.printf("Roter Angle %3.2f", angle);
-      M5.Lcd.setTextSize(2);
+      M5.Lcd.printf("Rotor Angle %3.2f", angle);
+      //M5.Lcd.setCursor(80, 130);
+      //M5.Lcd.printf("Velocity %4d", velocity);
       M5.Lcd.setCursor(80, 130);
-      M5.Lcd.printf("Velocity %4d", velocity);
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.setCursor(80, 160);
-      M5.Lcd.printf("Torque %5d", torque);
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.setCursor(80, 190);
-      M5.Lcd.printf("temp %3d", temp);  
-      Serial.print(angle); 
-      Serial.print(", ");   
-      Serial.print(velocity); 
-      Serial.print(", ");   
-      Serial.print(torque); 
-      Serial.print(", ");   
-      Serial.println(temp); 
+      M5.Lcd.printf("Torque %5.3f", torque);
+      //M5.Lcd.setCursor(80, 190);
+      //M5.Lcd.printf("temp %3d", temp);  
+      
+      
     
   }
 }
@@ -361,3 +382,74 @@ void button_action() {
     pattern = 11;
   }
 } 
+
+//AE HX711 Init
+//------------------------------------------------------------------//
+void AE_HX711_Init(void)
+{
+  pinMode(HX711_SCLK, OUTPUT);
+  pinMode(HX711_DOUT, INPUT);
+}
+
+//AE HX711 Reset
+//------------------------------------------------------------------//
+void AE_HX711_Reset(void)
+{
+  digitalWrite(HX711_SCLK,1);
+  delayMicroseconds(100);
+  digitalWrite(HX711_SCLK,0);
+  delayMicroseconds(100); 
+}
+
+//AE HX711 Read
+//------------------------------------------------------------------//
+long AE_HX711_Read(void)
+{
+  long data=0;
+  while(digitalRead(HX711_DOUT)!=0);
+  delayMicroseconds(1);
+  for(int i=0;i<24;i++)
+  {
+    digitalWrite(HX711_SCLK,1);
+    delayMicroseconds(1);
+    digitalWrite(HX711_SCLK,0);
+    delayMicroseconds(1);
+    data = (data<<1)|(digitalRead(HX711_DOUT));
+  }  
+  digitalWrite(HX711_SCLK,1);
+  delayMicroseconds(1);
+  digitalWrite(HX711_SCLK,0);
+  delayMicroseconds(1);
+  return data^0x800000; 
+}
+
+
+long AE_HX711_Averaging(long adc,char num)
+{
+  long sum = 0;
+  for (int i = 0; i < num; i++) sum += AE_HX711_Read();
+  return sum / num;
+}
+
+float AE_HX711_getGram(char num)
+{
+  #define HX711_R1  20000.0f
+  #define HX711_R2  8200.0f
+  #define HX711_VBG 1.25f
+  #define HX711_AVDD      4.2987f//(HX711_VBG*((HX711_R1+HX711_R2)/HX711_R2))
+  #define HX711_ADC1bit   HX711_AVDD/16777216 //16777216=(2^24)
+  #define HX711_PGA 128
+  #define HX711_SCALE     (OUT_VOL * HX711_AVDD / LOAD *HX711_PGA)
+  
+  float data;
+
+  data = AE_HX711_Averaging(AE_HX711_Read(),num)*HX711_ADC1bit; 
+  //Serial.println( HX711_AVDD);   
+  //Serial.println( HX711_ADC1bit);   
+  //Serial.println( HX711_SCALE);   
+  //Serial.println( data);   
+  data =  data / HX711_SCALE;
+
+
+  return data;
+}
