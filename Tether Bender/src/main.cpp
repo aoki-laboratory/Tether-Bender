@@ -10,23 +10,33 @@
  
 //Include
 //------------------------------------------------------------------//
+#include <stdint.h>
 #include <M5Stack.h>
 #include <mcp_can.h>
+#include <WiFi.h>
+#include <CircularBuffer.h>
+#include "driver/pcnt.h"
 
 //Define
 //------------------------------------------------------------------//
 #define CAN0_INT 15                             // Set INT to pin 15
-#define TIMER_INTERRUPT 10
+#define TIMER_INTERRUPT 1
 
 #define HX711_DOUT  5
 #define HX711_SCLK  2
 #define OUT_VOL     0.0007f
 #define LOAD        500.0f
 
+#define AVERATING_BUFFER_SIZE 100
+
 //Global
 //------------------------------------------------------------------//
-MCP_CAN CAN0(12);                               // Set CS to pin 12
+TaskHandle_t task_handl;
 
+CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_x0;
+
+// CAN
+MCP_CAN CAN0(12);                               // Set CS to pin 12
 byte data[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
 long unsigned int rxId;
@@ -42,12 +52,28 @@ byte torque_H;
 byte torque_L;
 byte temp_L;
 
+// Main
 unsigned short angle_buff;
 float angle;
 short velocity;
 int torque_buff;
 float torque;
 int8_t temp;
+bool sd_insert = false;
+unsigned char lcd_pattern = 0;
+unsigned char lcd_cnt = 0;
+volatile bool  lcd_flag = false;
+
+bool x0_flag = false;
+bool x1_flag = false;
+bool y0_flag = false;
+bool y1_flag = false;
+
+int level_x0;
+int level_x1;
+int level_y0;
+int level_y1;
+
 
 int power1 = 0;
 int power2 = 0;
@@ -61,9 +87,40 @@ int ki = 10;
 int kd = 100;
 float iBefore;
 
+// WiFi credentials.
+// Set password to "" for open networks.
+//char ssid[] = "Buffalo-G-0CBA";
+//char pass[] = "hh4aexcxesasx";
+char ssid[] = "X1Extreme-Hotspot";
+char pass[] = "5]6C458w";
+//char ssid[] = "Macaw";
+//char pass[] = "1234567890";
+
+bool wifi_flag = true;
+unsigned char wifi_cnt = 0;
+
+// Time
+char ntpServer[] = "ntp.nict.jp";
+const long gmtOffset_sec = 9 * 3600;
+const int  daylightOffset_sec = 0;
+struct tm timeinfo;
+String dateStr;
+String timeStr;
+
 // HX711
 float hx711_offset;
 float hx711_data;
+long  native_data_x0;
+long  native_data_x0_buffer;
+
+// LED 
+static const int ledPin = 3;
+bool led_flag = false;
+
+
+// Battery
+unsigned char battery_status;
+char battery_persent;
 
 
 // Timer
@@ -71,13 +128,16 @@ hw_timer_t * timer = NULL;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 volatile int interruptCounter;
 int iTimer10;
+int iTimer80;
 
 //Prototype
 //------------------------------------------------------------------//
 void init_can();
 void test_can();
-void taskInit();
 void button_action();
+void initLCD(void);
+void lcdDisplay(void);
+void taskDisplay(void *pvParameters);
 void IRAM_ATTR onTimer(void);
 void Timer_Interrupt(void);
 void servoControl(float ang);
@@ -86,15 +146,17 @@ void AE_HX711_Reset(void);
 long AE_HX711_Read(void);
 long AE_HX711_Averaging(long adc,char num);
 float AE_HX711_getGram(char num);
+void getTimeFromNTP(void);
+void getTime(void);
+void createLogfile(void);
+
 
 //Setup #1
 //------------------------------------------------------------------//
 void setup() {
-  M5.begin();
+  M5.begin(1, 1, 0, 1);
 
   Serial.begin(115200);
-
-  delay(500);
 
   // Initialize Timer Interrupt
   timer = timerBegin(0, 80, true);
@@ -104,24 +166,56 @@ void setup() {
 
   M5.Lcd.setTextColor(BLACK);
 
+  pinMode(ledPin, OUTPUT);
+
   AE_HX711_Init();
   AE_HX711_Reset();
-  hx711_offset = AE_HX711_getGram(30); 
+  //hx711_offset = AE_HX711_getGram(30); 
 
-  taskInit();
   init_can();
+
+  sd_insert = SD.begin(TFCARD_CS_PIN, SPI, 40000000);
+
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextColor(WHITE, BLACK);
+  M5.Lcd.printf("Initializing");  
+
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    wifi_cnt++;
+    M5.Lcd.printf(".");  
+    if( wifi_cnt > 14 ) {
+      wifi_flag = false;
+      break;
+    }
+    delay(500);  
+  }
+
+  if( wifi_flag ) {
+    // timeSet
+    getTimeFromNTP();
+    getTime();
+    while(WiFi.status() == WL_CONNECTED ){
+      WiFi.disconnect();
+      delay(2000);
+    }
+  }
+
+  initLCD();   
+
+  xTaskCreatePinnedToCore(&taskDisplay, "taskDisplay", 4096, NULL, 1, &task_handl, 0);
+
+   
 }
 
 //Main #1
 //------------------------------------------------------------------//
 void loop() {
   Timer_Interrupt(); 
-  test_can(); 
-  M5.update();
-  button_action(); 
+  //test_can();  
 
   switch (pattern) {
-  case 0:
+  case 0:    
     break;
   
   case 11:
@@ -149,7 +243,42 @@ void loop() {
     break;
 
   }
-  delay(1);
+}
+
+//Main #0
+//------------------------------------------------------------------//
+void taskDisplay(void *pvParameters){
+  long averating_data;
+
+  disableCore0WDT(); 
+  
+  for(int i=0; i<30; i++) {
+    averating_data += AE_HX711_Read();
+    delay(100);
+  }
+  averating_data = averating_data / 30;
+
+  while(1){    
+    lcdDisplay();
+    button_action(); 
+
+    if( x0_flag ) {
+      int sum = 0;
+      digitalWrite(ledPin, led_flag);  
+      led_flag = !led_flag;  
+      native_data_x0 = AE_HX711_Read() - averating_data;      
+      buffer_x0.push(native_data_x0 - native_data_x0_buffer);
+      native_data_x0_buffer = native_data_x0;
+      for(int i=0; i<AVERATING_BUFFER_SIZE; i++) {
+        sum += buffer_x0[i];
+      }
+      level_x0 = sum / AVERATING_BUFFER_SIZE;
+      x0_flag = false;
+      digitalWrite(ledPin, led_flag);  
+      led_flag = !led_flag;  
+    }
+
+  }
 }
 
 // Timer Interrupt
@@ -158,44 +287,124 @@ void Timer_Interrupt( void ){
   if (interruptCounter > 0) {
     portENTER_CRITICAL(&timerMux);
     interruptCounter--;
-    portEXIT_CRITICAL(&timerMux);
-
-    if(pattern == 13 && power1 < 30000) {
-      power1+=1;
-      M5.Lcd.setTextSize(3);
-      M5.Lcd.setCursor(220, 40);
-      M5.Lcd.setTextColor(WHITE, TFT_DARKGREY);
-      M5.Lcd.printf("%4d",power1);
-    }
-
-    hx711_data = (AE_HX711_getGram(1) - hx711_offset)*-1;  
-    Serial.print(angle); 
-    Serial.print(", ");   
-    Serial.print(velocity); 
-    Serial.print(", ");   
-    Serial.print(torque); 
-    Serial.print(", ");   
-    Serial.print(hx711_data/2); 
-    Serial.print(", ");   
-    Serial.println(temp); 
-    
+    portEXIT_CRITICAL(&timerMux);            
 
     iTimer10++;
     switch (iTimer10) {
-    case 1:
+    case 1:  
+      break;
+    case 5:      
+      break;
+    case 10:      
+      iTimer10 = 0;
+      break;
+    }
+
+    iTimer80++;
+    // 50ms timerinterrupt
+    switch (iTimer80) {
+    case 10:
+      Serial.printf("%5.2f, ", float(millis()) / 1000); 
+      Serial.printf("%3.2f, ", angle); 
+      Serial.printf("%5d, ", velocity); 
+      Serial.printf("%4.2f, ", torque); 
+      Serial.printf("%8d, ", native_data_x0); 
+      Serial.printf("%8d, ", level_x0); 
+      Serial.printf("%2.2f\n", temp); 
+      break;
+    case 20:
+      x0_flag = true;
+      break;
+    case 30:
+      break;
+    case 40:
+      break;
+    case 50:
+      break;
+    case 60:
+      break;
+    case 70:
+      break;
+    case 80:
+      lcd_flag = true;
+      iTimer80 = 0;
+      break;
+    }
+  }
+}
+
+// Initialize LCD
+//------------------------------------------------------------------//
+void initLCD(void) {
+
+  M5.Lcd.clear();   
+  switch (lcd_pattern) {
+  case 0:         
+    M5.Lcd.setTextColor(WHITE, BLACK);
+    M5.Lcd.setCursor(20, 10);
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.printf("T+:");  
+    M5.Lcd.setCursor(20, 60);
+    if( sd_insert ) {
+      M5.Lcd.drawJpgFile(SD, "/icon/icons8-sd.jpg", 214, 0);
+    }
+    if( wifi_flag ) {
+      M5.Lcd.drawJpgFile(SD, "/icon/icons8-wi-fi-1.jpg", 248, 0);      
+    } else {
+      M5.Lcd.drawJpgFile(SD, "/icon/icons8-wi-fi-0.jpg", 248, 0);     
+    }
+    break;
+  case 10:
+    break;
+  case 20:   
+    break;
+  }
+}
+
+
+// LCD Display
+//------------------------------------------------------------------//
+void lcdDisplay(void) {
+  unsigned int time_calc, time_h, time_m, time_s;
+
+  if( lcd_flag ) {    
+    // Refresh Display
+    switch (lcd_pattern) {
+    case 0:
+      time_calc = millis() / 1000;
+      time_h = time_calc / 3600;
+      time_calc %= 3600;
+      time_m = time_calc / 60;
+      time_calc %= 60;
+      time_s = time_calc;  
+
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(60, 10);
+      M5.Lcd.printf("%02d:%02d:%02d", time_h, time_m, time_s);
+      if( battery_persent == 100) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-100.jpg", 290, 0);
+      } else if( battery_persent == 75) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-75.jpg", 290, 0);
+      } else if( battery_persent == 50) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-50.jpg", 290, 0);
+      } else if( battery_persent == 25) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-25.jpg", 290, 0);
+      } else {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-0.jpg", 290, 0);
+      }  
+      lcd_flag = false; 
+      break;
+    case 10:
       M5.Lcd.setTextColor(WHITE, BLACK);
       M5.Lcd.setTextSize(2);
       M5.Lcd.setCursor(80, 160);
-      M5.Lcd.printf("HX711 %5.2f", hx711_data);
+      M5.Lcd.printf("HX711 %7d", native_data_x0);
       M5.Lcd.setCursor(80, 190);
-      M5.Lcd.printf("HXTorque %5.2f", hx711_data/2);
+      M5.Lcd.printf("level %7d", level_x0);
+      lcd_flag = false;
       break;
-    case 5:
-      
-      break;
-    case 10:
-      
-      iTimer10 = 0;
+    case 20:
+      lcd_flag = false;
       break;
     }
   }
@@ -307,79 +516,49 @@ void test_can(){
         torque = float(torque_buff) / 10;
       }
       temp = temp_L;
-      M5.Lcd.setTextColor(WHITE, BLACK);
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.setCursor(80, 100);
-      M5.Lcd.printf("Rotor Angle %3.2f", angle);
+      //M5.Lcd.setTextColor(WHITE, BLACK);
+      //M5.Lcd.setTextSize(2);
+      //M5.Lcd.setCursor(80, 100);
+      //M5.Lcd.printf("Rotor Angle %3.2f", angle);
       //M5.Lcd.setCursor(80, 130);
       //M5.Lcd.printf("Velocity %4d", velocity);
-      M5.Lcd.setCursor(80, 130);
-      M5.Lcd.printf("Torque %5.3f", torque);
+      //M5.Lcd.setCursor(80, 130);
+      //M5.Lcd.printf("Torque %5.3f", torque);
       //M5.Lcd.setCursor(80, 190);
-      //M5.Lcd.printf("temp %3d", temp);  
-      
-      
-    
+      //M5.Lcd.printf("temp %3d", temp);     
   }
-}
-
-// Initialize Task
-//------------------------------------------------------------------//
-void taskInit() {
-  M5.Lcd.fillRect(0, 0, 320, 20, TFT_WHITE);
-  M5.Lcd.fillRect(60, 20, 260, 60, TFT_DARKGREY);
-  M5.Lcd.fillRect(0, 80, 60, 160, TFT_DARKGREY);
-  M5.Lcd.fillRect(0, 20, 60, 60, TFT_LIGHTGREY);
-  M5.Lcd.fillRect(0, 220, 320, 20, TFT_WHITE);
-
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(8, 2);
-  M5.Lcd.setTextColor(BLACK);
-  M5.Lcd.print("Tether Bender V1");
-  M5.Lcd.setCursor(40, 222);
-  M5.Lcd.print("ROTA");
-  M5.Lcd.setCursor(140, 222);
-  M5.Lcd.print("MODE");
-  M5.Lcd.setCursor(228, 222);
-  M5.Lcd.print("SEAQ");
-  M5.Lcd.setTextSize(4);
-  M5.Lcd.setCursor(8, 36);
-  M5.Lcd.setTextColor(BLACK);
-  M5.Lcd.print("TB");
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor(80, 40);
-  M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.printf("Power");
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setCursor(8, 110);
-  M5.Lcd.print("No.");
-
-  M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setTextSize(5);
-  M5.Lcd.setCursor(0, 150);
-  M5.Lcd.printf("%2d", 1);
 }
 
 // Button Action
 //------------------------------------------------------------------//
 void button_action() {
-  if (M5.BtnA.wasPressed() && pattern == 0) {
-    M5.Lcd.setTextSize(3);
-    M5.Lcd.setCursor(220, 40);
-    M5.Lcd.setTextColor(TFT_DARKGREY);
-    M5.Lcd.printf("%4d",power1);
-    power1+=1000;
-    if( power1 > 30000 ) {
-      power1 = 0;
-    }
-    M5.Lcd.setTextSize(3);
-    M5.Lcd.setCursor(220, 40);
-    M5.Lcd.setTextColor(WHITE);
-    M5.Lcd.printf("%4d",power1);
+  M5.update();
+  if (M5.BtnA.wasPressed()) {
+    if( pattern == 0 ) {
+      lcd_pattern = 0;   
+      initLCD();
+    }  
   } else if (M5.BtnB.wasPressed()) {    
-  } else if (M5.BtnC.wasPressed() && pattern == 0) {    
-    pattern = 11;
+    if( pattern == 0 ) {
+      if(lcd_pattern >= 10 && lcd_pattern < 20) {
+        lcd_pattern++;
+        if(lcd_pattern >= 12) lcd_pattern = 10;
+      } else {
+        lcd_pattern = 10;
+      }     
+      initLCD();   
+    } 
+   
+  } else if (M5.BtnC.wasPressed()) {    
+    if( pattern == 0 ) {
+      if(lcd_pattern >= 20 && lcd_pattern < 30) {
+        lcd_pattern++;
+        if(lcd_pattern >= 22) lcd_pattern = 20;
+      } else {
+        lcd_pattern = 20;
+      } 
+      initLCD();  
+    } 
   }
 } 
 
@@ -444,12 +623,28 @@ float AE_HX711_getGram(char num)
   float data;
 
   data = AE_HX711_Averaging(AE_HX711_Read(),num)*HX711_ADC1bit; 
-  //Serial.println( HX711_AVDD);   
-  //Serial.println( HX711_ADC1bit);   
-  //Serial.println( HX711_SCALE);   
-  //Serial.println( data);   
   data =  data / HX711_SCALE;
-
-
   return data;
+}
+
+
+//Get Time From NTP
+//------------------------------------------------------------------//
+void getTimeFromNTP(void){
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  while (!getLocalTime(&timeinfo)) {
+    delay(1000);
+  }
+}
+
+//Get Convert Time
+//------------------------------------------------------------------//
+void getTime(void){
+  getLocalTime(&timeinfo);
+  dateStr = (String)(timeinfo.tm_year + 1900)
+          + "/" + (String)(timeinfo.tm_mon + 1)
+          + "/" + (String)timeinfo.tm_mday;
+  timeStr = (String)timeinfo.tm_hour
+          + ":" + (String)timeinfo.tm_min
+          + ":" + (String)timeinfo.tm_sec;
 }
