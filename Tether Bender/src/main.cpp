@@ -28,6 +28,7 @@
 #define LOAD        500.0f
 
 #define AVERATING_BUFFER_SIZE 100
+#define INITIALIZEING_SAMPLE 100
 
 //Global
 //------------------------------------------------------------------//
@@ -53,6 +54,7 @@ byte torque_L;
 byte temp_L;
 
 // Main
+volatile int cnt1 = 0;
 unsigned short angle_buff;
 float angle;
 short velocity;
@@ -63,6 +65,8 @@ bool sd_insert = false;
 unsigned char lcd_pattern = 0;
 unsigned char lcd_cnt = 0;
 volatile bool  lcd_flag = false;
+volatile unsigned int millis_buffer = 0;
+bool init_flag = false;
 
 bool x0_flag = false;
 bool x1_flag = false;
@@ -73,7 +77,6 @@ int level_x0;
 int level_x1;
 int level_y0;
 int level_y1;
-
 
 int power1 = 0;
 int power2 = 0;
@@ -112,6 +115,8 @@ float hx711_offset;
 float hx711_data;
 long  native_data_x0;
 long  native_data_x0_buffer;
+long  averating_data;
+long  averating_data_buffer;
 
 // LED 
 static const int ledPin = 3;
@@ -178,7 +183,7 @@ void setup() {
 
   M5.Lcd.setTextSize(2);
   M5.Lcd.setTextColor(WHITE, BLACK);
-  M5.Lcd.printf("Initializing");  
+  M5.Lcd.printf("Startup");  
 
   WiFi.begin(ssid, pass);
   while (WiFi.status() != WL_CONNECTED) {
@@ -202,6 +207,7 @@ void setup() {
   }
 
   initLCD();   
+  lcd_pattern = 100;
 
   xTaskCreatePinnedToCore(&taskDisplay, "taskDisplay", 4096, NULL, 1, &task_handl, 0);
 
@@ -219,14 +225,6 @@ void loop() {
     break;
   
   case 11:
-    servoControl(0);
-    if(velocity > -1 &&velocity <= 1) {
-      if(angle > -0.1 && angle < 0.1) {
-        pattern = 12;
-        iI = 0;
-        break;
-      }
-    }    
     break;
 
   case 12:
@@ -242,27 +240,48 @@ void loop() {
     }
     break;
 
+  case 101:
+    servoControl(0);
+    if(velocity > -1 &&velocity <= 1) {
+      if(angle > -0.1 && angle < 0.1) {
+        pattern = 102;
+        iI = 0;
+        break;
+      }
+    }    
+    averating_data_buffer = 0;
+    averating_data = 0;
+    pattern = 102;
+    break;
+  
+  case 102:    
+    if( millis() - millis_buffer > 100 ) {
+      averating_data_buffer += AE_HX711_Read();   
+      cnt1++;
+      millis_buffer = millis();
+      if( cnt1 >= INITIALIZEING_SAMPLE ) {
+        averating_data = averating_data_buffer / INITIALIZEING_SAMPLE;  
+        millis_buffer = millis();
+        lcd_pattern = 102;
+        init_flag = true;
+        pattern = 0;  
+      }
+    }
+    break;
   }
 }
 
 //Main #0
 //------------------------------------------------------------------//
-void taskDisplay(void *pvParameters){
-  long averating_data;
+void taskDisplay(void *pvParameters){  
 
   disableCore0WDT(); 
   
-  for(int i=0; i<30; i++) {
-    averating_data += AE_HX711_Read();
-    delay(100);
-  }
-  averating_data = averating_data / 30;
-
   while(1){    
     lcdDisplay();
     button_action(); 
 
-    if( x0_flag ) {
+    if( x0_flag && pattern < 100) {
       int sum = 0;
       digitalWrite(ledPin, led_flag);  
       led_flag = !led_flag;  
@@ -301,7 +320,7 @@ void Timer_Interrupt( void ){
     }
 
     iTimer80++;
-    // 50ms timerinterrupt
+    // 80ms timerinterrupt
     switch (iTimer80) {
     case 10:
       Serial.printf("%5.2f, ", float(millis()) / 1000); 
@@ -377,8 +396,8 @@ void lcdDisplay(void) {
       time_m = time_calc / 60;
       time_calc %= 60;
       time_s = time_calc;  
-
       M5.Lcd.setTextSize(2);
+      M5.Lcd.setTextColor(WHITE, BLACK);
       M5.Lcd.setCursor(60, 10);
       M5.Lcd.printf("%02d:%02d:%02d", time_h, time_m, time_s);
       if( battery_persent == 100) {
@@ -406,6 +425,73 @@ void lcdDisplay(void) {
     case 20:
       lcd_flag = false;
       break;
+    case 100:    
+      M5.Lcd.setCursor(25, 110);
+      M5.Lcd.printf("Waiting for initialize");
+      M5.Lcd.setCursor(82, 140);
+      M5.Lcd.printf("Press button A");
+      M5.Lcd.drawLine(73, 165, 253, 165, WHITE);
+      M5.Lcd.drawLine(73, 165, 62, 240, WHITE);   
+      lcd_pattern = 0;   
+      lcd_flag = false;
+      break;
+    case 101:
+      time_calc = millis() / 1000;
+      time_h = time_calc / 3600;
+      time_calc %= 3600;
+      time_m = time_calc / 60;
+      time_calc %= 60;
+      time_s = time_calc;  
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setTextColor(WHITE, BLACK);
+      M5.Lcd.setCursor(60, 10);
+      M5.Lcd.printf("%02d:%02d:%02d", time_h, time_m, time_s);
+      if( battery_persent == 100) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-100.jpg", 290, 0);
+      } else if( battery_persent == 75) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-75.jpg", 290, 0);
+      } else if( battery_persent == 50) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-50.jpg", 290, 0);
+      } else if( battery_persent == 25) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-25.jpg", 290, 0);
+      } else {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-0.jpg", 290, 0);
+      }  
+      M5.Lcd.setCursor(70, 110);
+      M5.Lcd.printf("Initializing...");
+      M5.Lcd.progressBar(40,160,240,20, cnt1);
+      lcd_flag = false; 
+      break;
+    case 102:
+      time_calc = millis() / 1000;
+      time_h = time_calc / 3600;
+      time_calc %= 3600;
+      time_m = time_calc / 60;
+      time_calc %= 60;
+      time_s = time_calc;  
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setTextColor(WHITE, BLACK);
+      M5.Lcd.setCursor(60, 10);
+      M5.Lcd.printf("%02d:%02d:%02d", time_h, time_m, time_s);
+      if( battery_persent == 100) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-100.jpg", 290, 0);
+      } else if( battery_persent == 75) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-75.jpg", 290, 0);
+      } else if( battery_persent == 50) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-50.jpg", 290, 0);
+      } else if( battery_persent == 25) {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-25.jpg", 290, 0);
+      } else {
+        M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-0.jpg", 290, 0);
+      }  
+      M5.Lcd.setCursor(40, 110);
+      M5.Lcd.printf("Initialize complete");
+      if( millis() - millis_buffer > 2000 ){ 
+        lcd_pattern = 0;
+        initLCD();
+      }
+      lcd_flag = false; 
+      break;
     }
   }
 }
@@ -420,18 +506,10 @@ void servoControl(float ang){
   preTime = micros();
 
   i = ang - angle;
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor(180, 40);
-  M5.Lcd.setTextColor(TFT_DARKGREY);
-  M5.Lcd.printf("%4d",iI);
   iP = kp * i;
   iI += ki * i;
   iD = kd * (i - iBefore);
   iRet = iP + iI + iD;
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor(180, 40);
-  M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.printf("%4d",iI);
   if( iRet > 30000 ) iRet = 30000;
   if( iRet < -30000 ) iRet = -30000;
   power1 = iRet;  
@@ -535,8 +613,14 @@ void button_action() {
   M5.update();
   if (M5.BtnA.wasPressed()) {
     if( pattern == 0 ) {
-      lcd_pattern = 0;   
-      initLCD();
+      if( init_flag ) {       
+        lcd_pattern = 0; 
+        initLCD();   
+      } else {
+        M5.Lcd.fillRect(0,30,320,210,0);
+        lcd_pattern = 101;
+        pattern = 101;
+      }      
     }  
   } else if (M5.BtnB.wasPressed()) {    
     if( pattern == 0 ) {
