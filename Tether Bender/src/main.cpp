@@ -21,11 +21,14 @@
 //------------------------------------------------------------------//
 #define CAN0_INT 15                             // Set INT to pin 15
 #define TIMER_INTERRUPT 1
-
-#define HX711_DOUT  5
-#define HX711_SCLK  2
-#define OUT_VOL     0.0007f
-#define LOAD        500.0f
+#define HX711_DOUT_X0  2
+#define HX711_SCLK_X0  5
+#define HX711_DOUT_X1  35
+#define HX711_SCLK_X1  16
+#define HX711_DOUT_Y0  36
+#define HX711_SCLK_Y0  17
+#define HX711_DOUT_Y1  34
+#define HX711_SCLK_Y1  0
 
 #define AVERATING_BUFFER_SIZE 100
 #define INITIALIZEING_SAMPLE 100
@@ -35,6 +38,9 @@
 TaskHandle_t task_handl;
 
 CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_x0;
+CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_x1;
+CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_y0;
+CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_y1;
 
 // CAN
 MCP_CAN CAN0(12);                               // Set CS to pin 12
@@ -110,30 +116,44 @@ struct tm timeinfo;
 String dateStr;
 String timeStr;
 
-// HX711
-float hx711_offset;
-float hx711_data;
+// HX711 X0
 long  native_data_x0;
 long  native_data_x0_buffer;
-long  averating_data;
-long  averating_data_buffer;
+long  averating_data_x0;
+long  averating_data_x0_buffer;
+
+// HX711 X1
+long  native_data_x1;
+long  native_data_x1_buffer;
+long  averating_data_x1;
+long  averating_data_x1_buffer;
+
+// HX711 Y0
+long  native_data_y0;
+long  native_data_y0_buffer;
+long  averating_data_y0;
+long  averating_data_y0_buffer;
+
+// HX711 Y1
+long  native_data_y1;
+long  native_data_y1_buffer;
+long  averating_data_y1;
+long  averating_data_y1_buffer;
 
 // LED 
-static const int ledPin = 3;
+static const int ledPin = 13;
 bool led_flag = false;
-
 
 // Battery
 unsigned char battery_status;
 char battery_persent;
 
-
 // Timer
 hw_timer_t * timer = NULL;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 volatile int interruptCounter;
-int iTimer10;
-int iTimer80;
+int iTimer15;
+int iTimer50;
 
 //Prototype
 //------------------------------------------------------------------//
@@ -146,11 +166,18 @@ void taskDisplay(void *pvParameters);
 void IRAM_ATTR onTimer(void);
 void Timer_Interrupt(void);
 void servoControl(float ang);
-void AE_HX711_Init(void);
-void AE_HX711_Reset(void);
-long AE_HX711_Read(void);
-long AE_HX711_Averaging(long adc,char num);
-float AE_HX711_getGram(char num);
+void AE_HX711_X0_Init(void);
+void AE_HX711_X0_Reset(void);
+long AE_HX711_X0_Read(void);
+void AE_HX711_X1_Init(void);
+void AE_HX711_X1_Reset(void);
+long AE_HX711_X1_Read(void);
+void AE_HX711_Y0_Init(void);
+void AE_HX711_Y0_Reset(void);
+long AE_HX711_Y0_Read(void);
+void AE_HX711_Y1_Init(void);
+void AE_HX711_Y1_Reset(void);
+long AE_HX711_Y1_Read(void);
 void getTimeFromNTP(void);
 void getTime(void);
 void createLogfile(void);
@@ -173,9 +200,14 @@ void setup() {
 
   pinMode(ledPin, OUTPUT);
 
-  AE_HX711_Init();
-  AE_HX711_Reset();
-  //hx711_offset = AE_HX711_getGram(30); 
+  AE_HX711_X0_Init();
+  AE_HX711_X0_Reset();
+  AE_HX711_X1_Init();
+  AE_HX711_X1_Reset();
+  AE_HX711_Y0_Init();
+  AE_HX711_Y0_Reset();
+  AE_HX711_Y1_Init();
+  AE_HX711_Y1_Reset();
 
   init_can();
 
@@ -249,20 +281,67 @@ void loop() {
         break;
       }
     }    
-    averating_data_buffer = 0;
-    averating_data = 0;
+    averating_data_x0_buffer = 0;
+    averating_data_x0 = 0;
+    millis_buffer = millis();
     pattern = 102;
     break;
   
   case 102:    
-    if( millis() - millis_buffer > 100 ) {
-      averating_data_buffer += AE_HX711_Read();   
+    if( millis() - millis_buffer > 20 ) {
+      averating_data_x0_buffer += AE_HX711_X0_Read();   
       cnt1++;
       millis_buffer = millis();
       if( cnt1 >= INITIALIZEING_SAMPLE ) {
-        averating_data = averating_data_buffer / INITIALIZEING_SAMPLE;  
+        averating_data_x0 = averating_data_x0_buffer / INITIALIZEING_SAMPLE;  
         millis_buffer = millis();
-        lcd_pattern = 102;
+        cnt1 = 0;
+        lcd_pattern = 1;
+        pattern = 103;  
+      }
+    }
+    break;
+
+  case 103:    
+    if( millis() - millis_buffer > 20 ) {
+      averating_data_x1_buffer += AE_HX711_X1_Read();   
+      cnt1++;
+      millis_buffer = millis();
+      if( cnt1 >= INITIALIZEING_SAMPLE ) {
+        averating_data_x1 = averating_data_x1_buffer / INITIALIZEING_SAMPLE;  
+        millis_buffer = millis();
+        cnt1 = 0;
+        lcd_pattern = 1;
+        pattern = 104;  
+      }
+    }  
+    break;
+
+  case 104:    
+    if( millis() - millis_buffer > 20 ) {
+      averating_data_y0_buffer += AE_HX711_Y0_Read();   
+      cnt1++;
+      millis_buffer = millis();
+      if( cnt1 >= INITIALIZEING_SAMPLE ) {
+        averating_data_y0 = averating_data_y0_buffer / INITIALIZEING_SAMPLE;  
+        millis_buffer = millis();
+        cnt1 = 0;
+        lcd_pattern = 1;
+        pattern = 105;  
+      }
+    }
+    break;
+
+  case 105:    
+    if( millis() - millis_buffer > 20 ) {
+      averating_data_y1_buffer += AE_HX711_Y1_Read();   
+      cnt1++;
+      millis_buffer = millis();
+      if( cnt1 >= INITIALIZEING_SAMPLE ) {
+        averating_data_y1 = averating_data_y1_buffer / INITIALIZEING_SAMPLE;  
+        millis_buffer = millis();
+        cnt1 = 0;
+        lcd_pattern = 102;        
         init_flag = true;
         pattern = 0;  
       }
@@ -285,7 +364,7 @@ void taskDisplay(void *pvParameters){
       int sum = 0;
       digitalWrite(ledPin, led_flag);  
       led_flag = !led_flag;  
-      native_data_x0 = AE_HX711_Read() - averating_data;      
+      native_data_x0 = AE_HX711_X0_Read() - averating_data_x0;      
       buffer_x0.push(native_data_x0 - native_data_x0_buffer);
       native_data_x0_buffer = native_data_x0;
       for(int i=0; i<AVERATING_BUFFER_SIZE; i++) {
@@ -293,6 +372,54 @@ void taskDisplay(void *pvParameters){
       }
       level_x0 = sum / AVERATING_BUFFER_SIZE;
       x0_flag = false;
+      digitalWrite(ledPin, led_flag);  
+      led_flag = !led_flag;  
+    }
+
+    if( x1_flag && pattern < 100) {
+      int sum = 0;
+      digitalWrite(ledPin, led_flag);  
+      led_flag = !led_flag;  
+      native_data_x1 = AE_HX711_X1_Read() - averating_data_x1;      
+      buffer_x1.push(native_data_x1 - native_data_x1_buffer);
+      native_data_x1_buffer = native_data_x1;
+      for(int i=0; i<AVERATING_BUFFER_SIZE; i++) {
+        sum += buffer_x1[i];
+      }
+      level_x1 = sum / AVERATING_BUFFER_SIZE;
+      x1_flag = false;
+      digitalWrite(ledPin, led_flag);  
+      led_flag = !led_flag;  
+    }
+
+    if( y0_flag && pattern < 100) {
+      int sum = 0;
+      digitalWrite(ledPin, led_flag);  
+      led_flag = !led_flag;  
+      native_data_y0 = AE_HX711_Y0_Read() - averating_data_y0;      
+      buffer_y0.push(native_data_y0 - native_data_y0_buffer);
+      native_data_y0_buffer = native_data_y0;
+      for(int i=0; i<AVERATING_BUFFER_SIZE; i++) {
+        sum += buffer_y0[i];
+      }
+      level_y0 = sum / AVERATING_BUFFER_SIZE;
+      y0_flag = false;
+      digitalWrite(ledPin, led_flag);  
+      led_flag = !led_flag;  
+    }
+
+    if( y1_flag && pattern < 100) {
+      int sum = 0;
+      digitalWrite(ledPin, led_flag);  
+      led_flag = !led_flag;  
+      native_data_y1 = AE_HX711_Y1_Read() - averating_data_y1;      
+      buffer_y1.push(native_data_y1 - native_data_y1_buffer);
+      native_data_y1_buffer = native_data_y1;
+      for(int i=0; i<AVERATING_BUFFER_SIZE; i++) {
+        sum += buffer_y1[i];
+      }
+      level_y1 = sum / AVERATING_BUFFER_SIZE;
+      y1_flag = false;
       digitalWrite(ledPin, led_flag);  
       led_flag = !led_flag;  
     }
@@ -306,22 +433,36 @@ void Timer_Interrupt( void ){
   if (interruptCounter > 0) {
     portENTER_CRITICAL(&timerMux);
     interruptCounter--;
-    portEXIT_CRITICAL(&timerMux);            
+    portEXIT_CRITICAL(&timerMux);       
 
-    iTimer10++;
-    switch (iTimer10) {
+    iTimer15++;
+    switch (iTimer15) {
     case 1:  
+      x0_flag = true;
       break;
-    case 5:      
+    case 2:      
       break;
-    case 10:      
-      iTimer10 = 0;
+    case 3:  
+      x1_flag = true;    
+      break;
+    case 4:      
+      break;
+    case 5:   
+      y0_flag = true;   
+      break;
+    case 6:      
+      break;
+    case 7:  
+      y1_flag = true;    
+      break;
+    case 15:      
+      iTimer15 = 0;
       break;
     }
 
-    iTimer80++;
+    iTimer50++;
     // 80ms timerinterrupt
-    switch (iTimer80) {
+    switch (iTimer50) {
     case 10:
       Serial.printf("%5.2f, ", float(millis()) / 1000); 
       Serial.printf("%3.2f, ", angle); 
@@ -329,24 +470,23 @@ void Timer_Interrupt( void ){
       Serial.printf("%4.2f, ", torque); 
       Serial.printf("%8d, ", native_data_x0); 
       Serial.printf("%8d, ", level_x0); 
+      Serial.printf("%8d, ", native_data_x1); 
+      Serial.printf("%8d, ", level_x1); 
+      Serial.printf("%8d, ", native_data_y0); 
+      Serial.printf("%8d, ", level_y0); 
+      Serial.printf("%8d, ", native_data_y1); 
+      Serial.printf("%8d, ", level_y1); 
       Serial.printf("%2.2f\n", temp); 
       break;
-    case 20:
-      x0_flag = true;
+    case 20:      
       break;
     case 30:
       break;
     case 40:
       break;
     case 50:
-      break;
-    case 60:
-      break;
-    case 70:
-      break;
-    case 80:
       lcd_flag = true;
-      iTimer80 = 0;
+      iTimer50 = 0;
       break;
     }
   }
@@ -387,7 +527,7 @@ void lcdDisplay(void) {
   unsigned int time_calc, time_h, time_m, time_s;
 
   if( lcd_flag ) {    
-    // Refresh Display
+    // Main
     switch (lcd_pattern) {
     case 0:
       time_calc = millis() / 1000;
@@ -413,13 +553,31 @@ void lcdDisplay(void) {
       }  
       lcd_flag = false; 
       break;
+    // Clear
+    case 1:
+      M5.Lcd.fillRect(0,30,320,210,0);
+      lcd_pattern = 101;
+      lcd_flag = false; 
+      break;
     case 10:
       M5.Lcd.setTextColor(WHITE, BLACK);
       M5.Lcd.setTextSize(2);
-      M5.Lcd.setCursor(80, 160);
-      M5.Lcd.printf("HX711 %7d", native_data_x0);
-      M5.Lcd.setCursor(80, 190);
-      M5.Lcd.printf("level %7d", level_x0);
+      M5.Lcd.setCursor(30, 10);
+      M5.Lcd.printf("X0    %7d", native_data_x0);
+      M5.Lcd.setCursor(30, 35);
+      M5.Lcd.printf("level  %7d", level_x0);
+      M5.Lcd.setCursor(30, 65);
+      M5.Lcd.printf("X1    %7d", native_data_x1);
+      M5.Lcd.setCursor(30, 90);
+      M5.Lcd.printf("level  %7d", level_x1);
+      M5.Lcd.setCursor(30, 120);
+      M5.Lcd.printf("Y0    %7d", native_data_y0);
+      M5.Lcd.setCursor(30, 145);
+      M5.Lcd.printf("level  %7d", level_y0);
+      M5.Lcd.setCursor(30, 175);
+      M5.Lcd.printf("Y1    %7d", native_data_y1);
+      M5.Lcd.setCursor(30, 200);
+      M5.Lcd.printf("level  %7d", level_y1);
       lcd_flag = false;
       break;
     case 20:
@@ -457,8 +615,16 @@ void lcdDisplay(void) {
       } else {
         M5.Lcd.drawJpgFile(SD, "/icon/icons8-battery-level-0.jpg", 290, 0);
       }  
-      M5.Lcd.setCursor(70, 110);
-      M5.Lcd.printf("Initializing...");
+      M5.Lcd.setCursor(50, 110);
+      if(pattern == 102) {
+        M5.Lcd.printf("Initializing X0...");
+      } else if(pattern == 103) {
+        M5.Lcd.printf("Initializing X1...");
+      } else if(pattern == 104) {
+        M5.Lcd.printf("Initializing Y0...");
+      } else if(pattern == 105) {
+        M5.Lcd.printf("Initializing Y1...");
+      }               
       M5.Lcd.progressBar(40,160,240,20, cnt1);
       lcd_flag = false; 
       break;
@@ -469,6 +635,7 @@ void lcdDisplay(void) {
       time_m = time_calc / 60;
       time_calc %= 60;
       time_s = time_calc;  
+      M5.Lcd.fillRect(0,30,320,210,0);
       M5.Lcd.setTextSize(2);
       M5.Lcd.setTextColor(WHITE, BLACK);
       M5.Lcd.setCursor(60, 10);
@@ -486,6 +653,8 @@ void lcdDisplay(void) {
       }  
       M5.Lcd.setCursor(40, 110);
       M5.Lcd.printf("Initialize complete");
+
+      
       if( millis() - millis_buffer > 2000 ){ 
         lcd_pattern = 0;
         initLCD();
@@ -648,69 +817,163 @@ void button_action() {
 
 //AE HX711 Init
 //------------------------------------------------------------------//
-void AE_HX711_Init(void)
+void AE_HX711_X0_Init(void)
 {
-  pinMode(HX711_SCLK, OUTPUT);
-  pinMode(HX711_DOUT, INPUT);
+  pinMode(HX711_SCLK_X0, OUTPUT);
+  pinMode(HX711_DOUT_X0, INPUT);
 }
 
 //AE HX711 Reset
 //------------------------------------------------------------------//
-void AE_HX711_Reset(void)
+void AE_HX711_X0_Reset(void)
 {
-  digitalWrite(HX711_SCLK,1);
+  digitalWrite(HX711_SCLK_X0,1);
   delayMicroseconds(100);
-  digitalWrite(HX711_SCLK,0);
+  digitalWrite(HX711_SCLK_X0,0);
   delayMicroseconds(100); 
 }
 
 //AE HX711 Read
 //------------------------------------------------------------------//
-long AE_HX711_Read(void)
+long AE_HX711_X0_Read(void)
 {
   long data=0;
-  while(digitalRead(HX711_DOUT)!=0);
+  while(digitalRead(HX711_DOUT_X0)!=0);
   delayMicroseconds(1);
   for(int i=0;i<24;i++)
   {
-    digitalWrite(HX711_SCLK,1);
+    digitalWrite(HX711_SCLK_X0,1);
     delayMicroseconds(1);
-    digitalWrite(HX711_SCLK,0);
+    digitalWrite(HX711_SCLK_X0,0);
     delayMicroseconds(1);
-    data = (data<<1)|(digitalRead(HX711_DOUT));
+    data = (data<<1)|(digitalRead(HX711_DOUT_X0));
   }  
-  digitalWrite(HX711_SCLK,1);
+  digitalWrite(HX711_SCLK_X0,1);
   delayMicroseconds(1);
-  digitalWrite(HX711_SCLK,0);
+  digitalWrite(HX711_SCLK_X0,0);
   delayMicroseconds(1);
   return data^0x800000; 
 }
 
-
-long AE_HX711_Averaging(long adc,char num)
+//AE HX711 Init
+//------------------------------------------------------------------//
+void AE_HX711_X1_Init(void)
 {
-  long sum = 0;
-  for (int i = 0; i < num; i++) sum += AE_HX711_Read();
-  return sum / num;
+  pinMode(HX711_SCLK_X1, OUTPUT);
+  pinMode(HX711_DOUT_X1, INPUT);
 }
 
-float AE_HX711_getGram(char num)
+//AE HX711 Reset
+//------------------------------------------------------------------//
+void AE_HX711_X1_Reset(void)
 {
-  #define HX711_R1  20000.0f
-  #define HX711_R2  8200.0f
-  #define HX711_VBG 1.25f
-  #define HX711_AVDD      4.2987f//(HX711_VBG*((HX711_R1+HX711_R2)/HX711_R2))
-  #define HX711_ADC1bit   HX711_AVDD/16777216 //16777216=(2^24)
-  #define HX711_PGA 128
-  #define HX711_SCALE     (OUT_VOL * HX711_AVDD / LOAD *HX711_PGA)
-  
-  float data;
-
-  data = AE_HX711_Averaging(AE_HX711_Read(),num)*HX711_ADC1bit; 
-  data =  data / HX711_SCALE;
-  return data;
+  digitalWrite(HX711_SCLK_X1,1);
+  delayMicroseconds(100);
+  digitalWrite(HX711_SCLK_X1,0);
+  delayMicroseconds(100); 
 }
 
+//AE HX711 Read
+//------------------------------------------------------------------//
+long AE_HX711_X1_Read(void)
+{
+  long data=0;
+  while(digitalRead(HX711_DOUT_X1)!=0);
+  delayMicroseconds(1);
+  for(int i=0;i<24;i++)
+  {
+    digitalWrite(HX711_SCLK_X1,1);
+    delayMicroseconds(1);
+    digitalWrite(HX711_SCLK_X1,0);
+    delayMicroseconds(1);
+    data = (data<<1)|(digitalRead(HX711_DOUT_X1));
+  }  
+  digitalWrite(HX711_SCLK_X1,1);
+  delayMicroseconds(1);
+  digitalWrite(HX711_SCLK_X1,0);
+  delayMicroseconds(1);
+  return data^0x800000; 
+}
+
+//AE HX711 Init
+//------------------------------------------------------------------//
+void AE_HX711_Y0_Init(void)
+{
+  pinMode(HX711_SCLK_Y0, OUTPUT);
+  pinMode(HX711_DOUT_Y0, INPUT);
+}
+
+//AE HX711 Reset
+//------------------------------------------------------------------//
+void AE_HX711_Y0_Reset(void)
+{
+  digitalWrite(HX711_SCLK_Y0,1);
+  delayMicroseconds(100);
+  digitalWrite(HX711_SCLK_Y0,0);
+  delayMicroseconds(100); 
+}
+
+//AE HX711 Read
+//------------------------------------------------------------------//
+long AE_HX711_Y0_Read(void)
+{
+  long data=0;
+  while(digitalRead(HX711_DOUT_Y0)!=0);
+  delayMicroseconds(1);
+  for(int i=0;i<24;i++)
+  {
+    digitalWrite(HX711_SCLK_Y0,1);
+    delayMicroseconds(1);
+    digitalWrite(HX711_SCLK_Y0,0);
+    delayMicroseconds(1);
+    data = (data<<1)|(digitalRead(HX711_DOUT_Y0));
+  }  
+  digitalWrite(HX711_SCLK_Y0,1);
+  delayMicroseconds(1);
+  digitalWrite(HX711_SCLK_Y0,0);
+  delayMicroseconds(1);
+  return data^0x800000; 
+}
+
+//AE HX711 Init
+//------------------------------------------------------------------//
+void AE_HX711_Y1_Init(void)
+{
+  pinMode(HX711_SCLK_Y1, OUTPUT);
+  pinMode(HX711_DOUT_Y1, INPUT);
+}
+
+//AE HX711 Reset
+//------------------------------------------------------------------//
+void AE_HX711_Y1_Reset(void)
+{
+  digitalWrite(HX711_SCLK_Y1,1);
+  delayMicroseconds(100);
+  digitalWrite(HX711_SCLK_Y1,0);
+  delayMicroseconds(100); 
+}
+
+//AE HX711 Read
+//------------------------------------------------------------------//
+long AE_HX711_Y1_Read(void)
+{
+  long data=0;
+  while(digitalRead(HX711_DOUT_Y1)!=0);
+  delayMicroseconds(1);
+  for(int i=0;i<24;i++)
+  {
+    digitalWrite(HX711_SCLK_Y1,1);
+    delayMicroseconds(1);
+    digitalWrite(HX711_SCLK_Y1,0);
+    delayMicroseconds(1);
+    data = (data<<1)|(digitalRead(HX711_DOUT_Y1));
+  }  
+  digitalWrite(HX711_SCLK_Y1,1);
+  delayMicroseconds(1);
+  digitalWrite(HX711_SCLK_Y1,0);
+  delayMicroseconds(1);
+  return data^0x800000; 
+}
 
 //Get Time From NTP
 //------------------------------------------------------------------//
