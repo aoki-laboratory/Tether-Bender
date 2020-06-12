@@ -116,30 +116,40 @@ String timeStr;
 
 bool hx711_flag = false;
 char hx711_pattern = 0;
+float load_step_x[] = {0, 2025, 4050, 6075, 8100, 10125, 12150, 14175, 16200, 18225, 20250};
+float load_step_y[] = {0, 2025, 4050, 6075, 8100, 10125, 12150, 14175, 16200, 18225, 20250};
 // HX711 X0
 long  native_data_x0;
 long  native_data_x0_buffer;
 long  averating_data_x0;
 long  averating_data_x0_buffer;
 long  calibration_factor_x0[11];
+float coefficient_x0;
+float intercept_x0;
 // HX711 X1
 long  native_data_x1;
 long  native_data_x1_buffer;
 long  averating_data_x1;
 long  averating_data_x1_buffer;
 long  calibration_factor_x1[11];
+float coefficient_x1;
+float intercept_x1;
 // HX711 Y0
 long  native_data_y0;
 long  native_data_y0_buffer;
 long  averating_data_y0;
 long  averating_data_y0_buffer;
 long  calibration_factor_y0[11];
+float coefficient_y0;
+float intercept_y0;
 // HX711 Y1
 long  native_data_y1;
 long  native_data_y1_buffer;
 long  averating_data_y1;
 long  averating_data_y1_buffer;
 long  calibration_factor_y1[11];
+float coefficient_y1;
+float intercept_y1;
 
 // LED 
 static const int ledPin = 13;
@@ -1142,11 +1152,27 @@ void getCalibrationDataY0(void) {
     calibration_factor_y0[j] = averating_data_y0_buffer / INITIALIZEING_SAMPLE;  
   }
 
+  float sum_xy = 0, sum_x = 0, sum_y = 0, sum_x2 = 0;
+
+  for (int i=0; i<11; i++) {
+    sum_xy += calibration_factor_y0[i] * load_step_y[i];
+    sum_x += calibration_factor_y0[i];
+    sum_y += load_step_y[i];
+    sum_x2 += pow(calibration_factor_y0[i], 2);
+  }
+  
+  coefficient_y0 = (11 * sum_xy - sum_x * sum_y) / (11 * sum_x2 - pow(sum_x, 2));
+  intercept_y0 = (sum_x2 * sum_y - sum_xy * sum_x) / (11 * sum_x2 - pow(sum_x, 2));
+
+
   Serial.printf(" Calibration Result\n\n");  
   for(int i=0; i<11; i++) {
-    Serial.printf("%2d, %10d\n", i, calibration_factor_y0[i]);  
+    Serial.printf(" %10d, %3.3f\n", calibration_factor_y0[i], load_step_y[i]);  
   }
+
+  Serial.printf("\n Coefficient = %f, Intercept = %f\n\n", coefficient_y0, intercept_y0);  
   tx_pattern = 1;  
+
   
 }
 
