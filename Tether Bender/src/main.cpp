@@ -20,20 +20,28 @@
 
 //Define
 //------------------------------------------------------------------//
+#define TIMER_INTERRUPT 1 
+
 #define CAN0_INT 15                             // Set INT to pin 15
-#define TIMER_INTERRUPT 1
-#define HX711_DOUT_X0  2
-#define HX711_SCLK_X0  5
+
+#define HX711_DOUT_X0  34
+#define HX711_SCLK_X0  0
 #define HX711_DOUT_X1  35
 #define HX711_SCLK_X1  16
 #define HX711_DOUT_Y0  36
 #define HX711_SCLK_Y0  17
-#define HX711_DOUT_Y1  34
-#define HX711_SCLK_Y1  0
+#define HX711_DOUT_Y1  2
+#define HX711_SCLK_Y1  5
 
 #define AVERATING_BUFFER_SIZE 100
 #define INITIALIZEING_SAMPLE 100
 #define CALIBRATION_PERIOD 15
+
+#define TORQUE_TOLERANCE_X 0.5
+#define I_TORQUE_TOLERANCE_X 50
+#define TORQUE_TOLERANCE_Y 10
+#define I_TORQUE_TOLERANCE_Y 1000
+#define ANGLE_TOLERANCE 1.0
 
 //Global
 //------------------------------------------------------------------//
@@ -44,6 +52,15 @@ CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_x1;
 CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_y0;
 CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_y1;
 
+const unsigned int LCD_STATUS = M5.Lcd.color565(0,0,0);
+const unsigned int LCD_MAIN = M5.Lcd.color565(8,8,8);
+const unsigned int LCD_BUTTON = M5.Lcd.color565(37,37,37);
+const unsigned int LCD_LINE = M5.Lcd.color565(20,20,20);
+
+const unsigned int LCD_GREEN = M5.Lcd.color565(160,200,170);
+const unsigned int LCD_RED = M5.Lcd.color565(195,95,45);
+
+
 // CAN
 MCP_CAN CAN0(12);                               // Set CS to pin 12
 byte data[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -53,52 +70,75 @@ unsigned char len = 0;
 unsigned char rxBuf[8];
 char msgString[128];                        // Array to store serial string
 
-byte angle_H;
-byte angle_L;
-byte velocity_H;
-byte velocity_L;
-byte torque_H;
-byte torque_L;
-byte temp_L;
-
 // Main
 volatile int cnt1 = 0;
-unsigned short angle_buff;
-float angle;
-short velocity;
-int torque_buff;
-float torque;
-int8_t temp;
 bool sd_insert = false;
 unsigned char lcd_pattern = 0;
 unsigned char lcd_cnt = 0;
 volatile bool  lcd_flag = false;
 volatile unsigned int millis_buffer = 0;
 bool init_flag = false;
+char progress_value = 0;
 
-int level_x0;
-int level_x1;
-int level_y0;
-int level_y1;
+float target_angle_x0;
+float target_angle_x1;
+float target_angle_y0;
+float target_angle_y1;
 
-int power1 = 0;
-int power2 = 0;
-int power3 = 0;
-int power4 = 0;
+float initial_angle_x0;
+float initial_angle_x1;
+float initial_angle_y0;
+float initial_angle_y1;
+
+int step_angle_x = 0;
+int step_angle_y = 0;
+
+bool interrupt_flag_x0 = false;
+bool interrupt_flag2_x0 = false;
+bool interrupt_flag_x1 = false;
+bool interrupt_flag2_x1 = false;
+bool interrupt_flag_y0 = false;
+bool interrupt_flag2_y0 = false;
+bool interrupt_flag_y1 = false;
+bool interrupt_flag2_y1 = false;
+
+int power_x0 = 0;
+int power_x1 = 0;
+int power_y0 = 0;
+int power_y1 = 0;
+
+int servo_x0_output = 0;
+int servo_x1_output = 0;
+int servo_y0_output = 0;
+int servo_y1_output = 0;
 
 volatile int pattern = 0;
-int iP, iD, iI;
-int kp = 25;
-int ki = 10;
-int kd = 100;
-float iBefore;
+int iP_x0, iD_x0;
+float iI_x0;
+float iBefore_x0;
+int iP_x1, iD_x1;
+float iI_x1;
+float iBefore_x1;
+int iP_y0, iD_y0;
+float iI_y0;
+float iBefore_y0;
+int iP_y1, iD_y1;
+float iI_y1;
+float iBefore_y1;
+int agg_kp = 200;
+int agg_ki = 0;
+int agg_kd = 0;
+int cons_kp = 1000;
+int cons_ki = 0;
+int cons_kd = 1;
+
 
 // WiFi credentials.
 // Set password to "" for open networks.
-char ssid[] = "Buffalo-G-0CBA";
-char pass[] = "hh4aexcxesasx";
-//char ssid[] = "X1Extreme-Hotspot";
-//char pass[] = "5]6C458w";
+//char ssid[] = "Buffalo-G-0CBA";
+//char pass[] = "hh4aexcxesasx";
+char ssid[] = "X1Extreme-Hotspot";
+char pass[] = "5]6C458w";
 //char ssid[] = "Macaw";
 //char pass[] = "1234567890";
 
@@ -119,37 +159,72 @@ char hx711_pattern = 0;
 float load_step_x[] = {0, 2025, 4050, 6075, 8100, 10125, 12150, 14175, 16200, 18225, 20250};
 float load_step_y[] = {0, 2025, 4050, 6075, 8100, 10125, 12150, 14175, 16200, 18225, 20250};
 // HX711 X0
-long  native_data_x0;
-long  native_data_x0_buffer;
-long  averating_data_x0;
-long  averating_data_x0_buffer;
-long  calibration_factor_x0[11];
-float coefficient_x0;
-float intercept_x0;
+long    native_data_x0;
+long    native_data_x0_buffer;
+long    averating_data_x0;
+long    averating_data_x0_buffer;
+long    calibration_factor_x0[11];
+float   coefficient_x0;
+float   intercept_x0;
+long    coefficient_x0_eeprom;
+long    intercept_x0_eeprom;
+float   torque_x0;
 // HX711 X1
-long  native_data_x1;
-long  native_data_x1_buffer;
-long  averating_data_x1;
-long  averating_data_x1_buffer;
-long  calibration_factor_x1[11];
-float coefficient_x1;
-float intercept_x1;
+long    native_data_x1;
+long    native_data_x1_buffer;
+long    averating_data_x1;
+long    averating_data_x1_buffer;
+long    calibration_factor_x1[11];
+float   coefficient_x1;
+float   intercept_x1;
+long    coefficient_x1_eeprom;
+long    intercept_x1_eeprom;
+float   torque_x1;
 // HX711 Y0
-long  native_data_y0;
-long  native_data_y0_buffer;
-long  averating_data_y0;
-long  averating_data_y0_buffer;
-long  calibration_factor_y0[11];
-float coefficient_y0;
-float intercept_y0;
+long    native_data_y0;
+long    native_data_y0_buffer;
+long    averating_data_y0;
+long    averating_data_y0_buffer;
+long    calibration_factor_y0[11];
+float   coefficient_y0;
+float   intercept_y0;
+long    coefficient_y0_eeprom;
+long    intercept_y0_eeprom;
+float   torque_y0;
 // HX711 Y1
-long  native_data_y1;
-long  native_data_y1_buffer;
-long  averating_data_y1;
-long  averating_data_y1_buffer;
-long  calibration_factor_y1[11];
-float coefficient_y1;
-float intercept_y1;
+long     native_data_y1;
+long     native_data_y1_buffer;
+long     averating_data_y1;
+long     averating_data_y1_buffer;
+long     calibration_factor_y1[11];
+float    coefficient_y1;
+float    intercept_y1;
+long    coefficient_y1_eeprom;
+long    intercept_y1_eeprom;
+float   torque_y1;
+
+int level_x0;
+int level_x1;
+int level_y0;
+int level_y1;
+
+// GM6020
+float angle_can_x0;
+short velocity_can_x0;
+float torque_can_x0;
+int8_t temp_can_x0;
+float angle_can_x1;
+short velocity_can_x1;
+float torque_can_x1;
+int8_t temp_can_x1;
+float angle_can_y0;
+short velocity_can_y0;
+float torque_can_y0;
+int8_t temp_can_y0;
+float angle_can_y1;
+short velocity_can_y1;
+float torque_can_y1;
+int8_t temp_can_y1;
 
 // LED 
 static const int ledPin = 13;
@@ -175,15 +250,22 @@ int iTimer50;
 
 //Prototype
 //------------------------------------------------------------------//
-void init_can();
-void test_can();
-void button_action();
+void init_can(void);
+void test_can(void);
+void button_action(void);
 void initLCD(void);
 void lcdDisplay(void);
 void taskDisplay(void *pvParameters);
 void IRAM_ATTR onTimer(void);
 void TimerInterrupt(void);
-void servoControl(float ang);
+void servoControlX0(float ang);
+void servoControlX1(float ang);
+void servoControlY0(float ang);
+void servoControlY1(float ang);
+void targetAngleX0(float tang);
+void targetAngleX1(float tang);
+void targetAngleY0(float tang);
+void targetAngleY1(float tang);
 void AE_HX711_Init(void);
 void AE_HX711_Reset(void);
 void AE_HX711_Read(void);
@@ -205,15 +287,13 @@ void getCalibrationDataY1(void);
 void setup() {
   M5.begin(1, 1, 0, 1);
 
-  Serial.begin(115200);
+  Serial.begin(230400);
 
   // Initialize Timer Interrupt
   timer = timerBegin(0, 80, true);
   timerAttachInterrupt(timer, &onTimer, true);
   timerAlarmWrite(timer, TIMER_INTERRUPT * 1000, true);
   timerAlarmEnable(timer); 
-
-  M5.Lcd.setTextColor(BLACK);
 
   pinMode(ledPin, OUTPUT);
 
@@ -257,6 +337,9 @@ void setup() {
 
   delay(500);  
 
+  EEPROM.begin(128);
+  delay(10);
+  eeprom_read();
    
 }
 
@@ -264,13 +347,182 @@ void setup() {
 //------------------------------------------------------------------//
 void loop() {
 
-  //test_can();  
+  test_can();  
 
   SerialRX();
   SerialTX();
 
   switch (pattern) {
-  case 0:    
+  case 0: 
+    power_x0 = 0;   
+    power_x1 = 0;     
+    power_y0 = 0;   
+    power_y1 = 0;   
+    break;
+
+  // Start Sequence
+  case 11:
+    targetAngleX0(0); 
+    servoControlX0(target_angle_x0);  
+    power_x0 = servo_x0_output;
+    if(angle_can_x0 > -1.0 && angle_can_x0 < 1.0) {
+      pattern = 12;
+    }
+    break;
+    
+  case 12:
+    servoControlX0(step_angle_x);  
+    power_x0 = servo_x0_output;
+    break;
+  
+  // Set Home Position
+  case 101:
+    if(angle_can_x0 > angle_can_x1+1) {
+      if( angle_can_x0 > 0 && angle_can_x1 > 0) {
+        pattern = 111;
+        break;
+      } else if( angle_can_x0 < 0 && angle_can_x1 < 0) {
+        pattern = 121;
+        break;
+      } else {
+        pattern = 131;
+        break;
+      }     
+    } else if(angle_can_x0 < angle_can_x1-1) {
+      if( angle_can_x0 > 0 && angle_can_x1 > 0) {
+        pattern = 121;
+        break;
+      } else if( angle_can_x0 < 0 && angle_can_x1 < 0) {
+        pattern = 111;
+        break;
+      } else {
+        pattern = 131;
+        break;
+      }
+    } else {
+      pattern = 131;
+      break;
+    }
+    break;
+
+  case 111:
+    targetAngleX0(angle_can_x1); 
+    servoControlX0(target_angle_x0);  
+    power_x0 = servo_x0_output;
+    if(angle_can_x0 > angle_can_x1-1 && angle_can_x0 < angle_can_x1+1) {
+      pattern = 131;
+    }
+    break;
+  
+  case 121:
+    targetAngleX1(angle_can_x0); 
+    servoControlX1(target_angle_x1);  
+    power_x1 = servo_x1_output;
+    if(angle_can_x1 > angle_can_x0-1 && angle_can_x1 < angle_can_x0+1) {
+      pattern = 131;
+    }
+    break;
+
+  case 131:
+    targetAngleX0(0); 
+    targetAngleX1(0); 
+    servoControlX0(target_angle_x0);  
+    servoControlX1(target_angle_x1);  
+    power_x0 = servo_x0_output;
+    power_x1 = servo_x1_output;
+    if(angle_can_x0 > -1.0 && angle_can_x0 < 1.0 && angle_can_x1 > -1.0 && angle_can_x1 < 1.0) {
+      pattern = 151;
+    }
+    break;
+
+  case 151:
+    if(angle_can_y0 > angle_can_y1+1) {
+      if( angle_can_y0 > 0 && angle_can_y1 > 0) {
+        pattern = 161;
+        break;
+      } else if( angle_can_y0 < 0 && angle_can_y1 < 0) {
+        pattern = 171;
+        break;
+      } else {
+        pattern = 181;
+        break;
+      }     
+    } else if(angle_can_y0 < angle_can_y1-1) {
+      if( angle_can_y0 > 0 && angle_can_y1 > 0) {
+        pattern = 171;
+        break;
+      } else if( angle_can_y0 < 0 && angle_can_y1 < 0) {
+        pattern = 161;
+        break;
+      } else {
+        pattern = 181;
+        break;
+      }
+    } else {
+      pattern = 181;
+      break;
+    }
+    break;
+
+  case 161:
+    targetAngleY0(angle_can_y1); 
+    servoControlY0(target_angle_y0);  
+    power_y0 = servo_y0_output;
+    if(angle_can_y0 > angle_can_y1-1 && angle_can_y0 < angle_can_y1+1) {
+      pattern = 181;
+    }
+    break;
+  
+  case 171:
+    targetAngleY1(angle_can_y0); 
+    servoControlY1(target_angle_y1);  
+    power_y1 = servo_y1_output;
+    if(angle_can_y1 > angle_can_y0-1 && angle_can_y1 < angle_can_y0+1) {
+      pattern = 181;
+    }
+    break;
+
+  case 181:
+    targetAngleY0(0); 
+    targetAngleY1(0); 
+    servoControlY0(target_angle_y0);  
+    servoControlY1(target_angle_y1);  
+    power_y0 = servo_y0_output;
+    power_y1 = servo_y1_output;
+    if(angle_can_y0 > -1.0 && angle_can_y0 < 1.0 && angle_can_y1 > -1.0 && angle_can_y1 < 1.0) {
+      pattern = 0;
+      Serial.printf(" Complete!");
+      lcd_pattern = 0;
+      tx_pattern = 1;
+    }
+    break;
+
+  // Initialize
+  case 201:
+    getOffsetValue();
+    lcd_pattern = 0;
+    pattern = 0;
+    break;
+
+  // Calibration
+  case 301:
+    getCalibrationDataX0();
+    pattern = 0;
+    break;
+
+  case 311:
+    getCalibrationDataX1();
+    pattern = 0;
+    break;
+
+  case 321:
+    getCalibrationDataY0();
+    pattern = 0;
+    break;
+
+  case 331:
+    getCalibrationDataY1();
+    pattern = 0;
     break;
 
 
@@ -285,9 +537,10 @@ void taskDisplay(void *pvParameters){
   
   while(1){    
 
-    TimerInterrupt();     
+    TimerInterrupt();  
 
-    lcdDisplay();
+    lcdDisplay();   
+
     button_action(); 
     AE_HX711_Read();
 
@@ -300,7 +553,16 @@ void TimerInterrupt( void ){
   if (interruptCounter > 0) {
     portENTER_CRITICAL(&timerMux);
     interruptCounter--;
-    portEXIT_CRITICAL(&timerMux);       
+    portEXIT_CRITICAL(&timerMux);   
+
+    interrupt_flag_x0 =  true;
+    interrupt_flag2_x0 = true;
+    interrupt_flag_x1 =  true;
+    interrupt_flag2_x1 = true;
+    interrupt_flag_y0 =  true;
+    interrupt_flag2_y0 = true;
+    interrupt_flag_y1 =  true;
+    interrupt_flag2_y1 = true;
 
     iTimer15++;
     switch (iTimer15) {
@@ -333,21 +595,26 @@ void TimerInterrupt( void ){
     case 10:
       if( tx_pattern == 101 ) {
         Serial.printf("%5.2f, ", float(millis()) / 1000); 
-        Serial.printf("%3.2f, ", angle); 
-        Serial.printf("%5d, ", velocity); 
-        Serial.printf("%4.2f, ", torque); 
+        Serial.printf("%5d, ", pattern); 
+        Serial.printf("%3.2f, ", angle_can_x0); 
+        Serial.printf("%3.2f, ", angle_can_x1); 
+        Serial.printf("%3.2f, ", angle_can_y0); 
+        Serial.printf("%3.2f, ", angle_can_y1); 
         Serial.printf("%10ld, ", native_data_x0); 
-        Serial.printf("%10d, ", level_x0); 
+        Serial.printf("%5d, ", level_x0); 
         Serial.printf("%10ld, ", native_data_x1); 
-        Serial.printf("%10d, ", level_x1); 
+        Serial.printf("%5d, ", level_x1); 
         Serial.printf("%10ld, ", native_data_y0); 
-        Serial.printf("%10d, ", level_y0); 
+        Serial.printf("%5d, ", level_y0); 
         Serial.printf("%10ld, ", native_data_y1); 
-        Serial.printf("%10d, ", level_y1); 
-        Serial.printf("%2.2f\n", temp); 
+        Serial.printf("%5d, ", level_y1); 
+        Serial.printf("%5.2f, ", torque_x0); 
+        Serial.printf("%5.2f, ", torque_x1); 
+        Serial.printf("%5.2f, ", torque_y0); 
+        Serial.printf("%5.2f\n", torque_y1); 
       }
       break;
-    case 20:      
+    case 20:          
       break;
     case 30:
       break;
@@ -360,8 +627,6 @@ void TimerInterrupt( void ){
     }
   }
 }
-
-
 
 // Serial RX
 //------------------------------------------------------------------//
@@ -393,26 +658,36 @@ void SerialRX(void) {
         
       case 11:      
         tx_pattern = 11;
-        rx_pattern = 21;
+        rx_pattern = 12;
         break;
 
-      case 21:             
-        getCalibrationDataX0();
+      case 12:
+        if( rx_val == 1 ) {   
+          
+          pattern = 11;
+        } else {
+          tx_pattern = 1;
+        }
+        rx_pattern = 0;
+        break;
+
+      case 21:         
+        pattern = 301;
         rx_pattern = 0;
         break;
 
       case 22:             
-        getCalibrationDataX1();
+        pattern = 311;
         rx_pattern = 0;
         break;
 
       case 23:             
-        getCalibrationDataY0();
+        pattern = 321;
         rx_pattern = 0;
         break;
 
       case 24:             
-        getCalibrationDataY1();
+        pattern = 301;
         rx_pattern = 0;
         break;
 
@@ -426,8 +701,8 @@ void SerialRX(void) {
         break;
 
       case 201:
-        if( rx_val == 1 ) {              
-          getOffsetValue();
+        if( rx_val == 1 ) {  
+          pattern = 201;
         } else {
           tx_pattern = 1;
         }
@@ -440,9 +715,31 @@ void SerialRX(void) {
       Serial.printf("\n\n");
       tx_pattern = 101;
     } else if( xbee_rx_buffer[xbee_index] == 'I' || xbee_rx_buffer[xbee_index] == 'i' ) {
-      Serial.printf("\n\n");
-      tx_pattern = 201;
-      rx_pattern = 201;
+      if(pattern == 0) {
+        Serial.printf("\n\n");
+        tx_pattern = 201;
+        rx_pattern = 201;
+      }
+    } else if( xbee_rx_buffer[xbee_index] == 'H' || xbee_rx_buffer[xbee_index] == 'h' ) {
+      if(pattern == 0) {
+        Serial.printf("\n\n");
+        initial_angle_x0 = angle_can_x0;
+        initial_angle_x1 = angle_can_x1;
+        initial_angle_y0 = angle_can_y0;
+        initial_angle_y1 = angle_can_y1;
+        iI_x0 = 0;       
+        iBefore_x0 = 0;
+        iI_x1 = 0;       
+        iBefore_x1 = 0;
+        iI_y0 = 0;       
+        iBefore_y0 = 0;
+        iI_y1 = 0;       
+        iBefore_y1 = 0;
+        lcd_pattern = 20;
+        pattern = 101;
+        tx_pattern = 202;
+        rx_pattern = 0;
+      }
     } else {
         xbee_index++;
     }
@@ -471,9 +768,9 @@ void SerialTX(void) {
       Serial.printf(" 23 : Calibration Y0\n");
       Serial.printf(" 24 : Calibration Y1\n");
       Serial.printf("\n");
-      Serial.printf("\n");
       Serial.printf(" T : Telemetry\n");
       Serial.printf(" I : Initialize\n");
+      Serial.printf(" H : Homing\n");
       
       Serial.printf("\n");
       Serial.printf(" Please enter 11 to 35 -> ");
@@ -486,10 +783,7 @@ void SerialTX(void) {
       break;
 
     case 11:
-      Serial.printf("\n Check Current Parameters\n");
-      Serial.printf("\n");
-      Serial.printf("\n");
-      Serial.printf(" Confirm to Climb? -> ");
+      Serial.printf(" Confirm to Start Sequence? -> ");
       tx_pattern = 2;
       break;
 
@@ -503,12 +797,50 @@ void SerialTX(void) {
       tx_pattern = 2;
       break;
 
+    // Initialize 
+    case 202:
+      Serial.printf(" Homing All Axis...\n\n");
+      tx_pattern = 0;
+      break;
+
   }
 }
 
 // EEPROM Write
 //------------------------------------------------------------------// 
 void eeprom_write(void) {
+  EEPROM.write(0, (coefficient_x0_eeprom & 0xFF));
+  EEPROM.write(1, (coefficient_x0_eeprom>>8 & 0xFF));
+  EEPROM.write(2, (coefficient_x0_eeprom>>16 & 0xFF));
+  EEPROM.write(3, (coefficient_x0_eeprom>>24 & 0xFF));
+  EEPROM.write(4, (coefficient_x1_eeprom & 0xFF));
+  EEPROM.write(5, (coefficient_x1_eeprom>>8 & 0xFF));
+  EEPROM.write(6, (coefficient_x1_eeprom>>16 & 0xFF));
+  EEPROM.write(7, (coefficient_x1_eeprom>>24 & 0xFF));
+  EEPROM.write(8, (coefficient_y0_eeprom & 0xFF));
+  EEPROM.write(9, (coefficient_y0_eeprom>>8 & 0xFF));
+  EEPROM.write(10, (coefficient_y0_eeprom>>16 & 0xFF));
+  EEPROM.write(11, (coefficient_y0_eeprom>>24 & 0xFF));
+  EEPROM.write(12, (coefficient_y1_eeprom & 0xFF));
+  EEPROM.write(13, (coefficient_y1_eeprom>>8 & 0xFF));
+  EEPROM.write(14, (coefficient_y1_eeprom>>16 & 0xFF));
+  EEPROM.write(15, (coefficient_y1_eeprom>>24 & 0xFF));
+  EEPROM.write(16, (intercept_x0_eeprom & 0xFF));
+  EEPROM.write(17, (intercept_x0_eeprom>>8 & 0xFF));
+  EEPROM.write(18, (intercept_x0_eeprom>>16 & 0xFF));
+  EEPROM.write(19, (intercept_x0_eeprom>>24 & 0xFF));
+  EEPROM.write(20, (intercept_x1_eeprom & 0xFF));
+  EEPROM.write(21, (intercept_x1_eeprom>>8 & 0xFF));
+  EEPROM.write(22, (intercept_x1_eeprom>>16 & 0xFF));
+  EEPROM.write(23, (intercept_x1_eeprom>>24 & 0xFF));
+  EEPROM.write(24, (intercept_y0_eeprom & 0xFF));
+  EEPROM.write(25, (intercept_y0_eeprom>>8 & 0xFF));
+  EEPROM.write(26, (intercept_y0_eeprom>>16 & 0xFF));
+  EEPROM.write(27, (intercept_y0_eeprom>>24 & 0xFF));
+  EEPROM.write(28, (intercept_y1_eeprom & 0xFF));
+  EEPROM.write(29, (intercept_y1_eeprom>>8 & 0xFF));
+  EEPROM.write(30, (intercept_y1_eeprom>>16 & 0xFF));
+  EEPROM.write(31, (intercept_y1_eeprom>>24 & 0xFF));
   delay(10);
   EEPROM.commit();
   delay(10);
@@ -517,6 +849,18 @@ void eeprom_write(void) {
 // EEPROM Read
 //------------------------------------------------------------------// 
 void eeprom_read(void) {
+    coefficient_x0_eeprom = EEPROM.read(0) + (EEPROM.read(1)<<8) + (EEPROM.read(2)<<16) + (EEPROM.read(3)<<24);
+    coefficient_x1_eeprom = EEPROM.read(4) + (EEPROM.read(5)<<8) + (EEPROM.read(6)<<16) + (EEPROM.read(7)<<24);
+    coefficient_y0_eeprom = EEPROM.read(8) + (EEPROM.read(9)<<8) + (EEPROM.read(10)<<16) + (EEPROM.read(11)<<24);
+    coefficient_y1_eeprom = EEPROM.read(12) + (EEPROM.read(13)<<8) + (EEPROM.read(14)<<16) + (EEPROM.read(15)<<24);
+    coefficient_x0 = (float)coefficient_x0_eeprom / 1000000;
+    coefficient_x1 = (float)coefficient_x1_eeprom / 1000000;
+    coefficient_y0 = (float)coefficient_y0_eeprom / 1000000;
+    coefficient_y1 = (float)coefficient_y1_eeprom / 1000000;
+    intercept_x0_eeprom = EEPROM.read(16) + (EEPROM.read(17)<<8) + (EEPROM.read(18)<<16) + (EEPROM.read(19)<<24);
+    intercept_x1_eeprom = EEPROM.read(20) + (EEPROM.read(21)<<8) + (EEPROM.read(22)<<16) + (EEPROM.read(23)<<24);
+    intercept_y0_eeprom = EEPROM.read(24) + (EEPROM.read(25)<<8) + (EEPROM.read(26)<<16) + (EEPROM.read(27)<<24);
+    intercept_y1_eeprom = EEPROM.read(28) + (EEPROM.read(29)<<8) + (EEPROM.read(30)<<16) + (EEPROM.read(31)<<24);
     delay(10);
 }
 
@@ -539,6 +883,19 @@ void initLCD(void) {
     M5.Lcd.drawJpgFile(SD, "/icon/icons8-wi-fi-0.jpg", 286, 0);     
   }
 
+  M5.Lcd.fillRect(0, 32, 320, 180, LCD_MAIN);
+  
+  M5.Lcd.fillRect(0, 210, 320, 30, LCD_BUTTON);
+  M5.Lcd.drawFastVLine(110, 210, 30, LCD_LINE);
+  M5.Lcd.drawFastVLine(210, 210, 30, LCD_LINE);
+  M5.Lcd.setTextColor(WHITE, LCD_BUTTON);
+  M5.Lcd.setCursor(37, 217);
+  M5.Lcd.printf("Init");
+  M5.Lcd.setCursor(137, 217);
+  M5.Lcd.printf("Home");
+  M5.Lcd.setCursor(235, 217);
+  M5.Lcd.printf("Seq");
+
 }
 
 
@@ -548,22 +905,149 @@ void lcdDisplay(void) {
   unsigned int time_calc, time_h, time_m, time_s;
 
   if( lcd_flag ) {    
+    time_calc = millis() / 1000;
+    time_h = time_calc / 3600;
+    time_calc %= 3600;
+    time_m = time_calc / 60;
+    time_calc %= 60;
+    time_s = time_calc;  
+
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(WHITE, BLACK);
+    M5.Lcd.setCursor(60, 10);
+    M5.Lcd.printf("%02d:%02d:%02d", time_h, time_m, time_s);
+
     // Main
     switch (lcd_pattern) {
-    case 0:
-      time_calc = millis() / 1000;
-      time_h = time_calc / 3600;
-      time_calc %= 3600;
-      time_m = time_calc / 60;
-      time_calc %= 60;
-      time_s = time_calc;  
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.setTextColor(WHITE, BLACK);
-      M5.Lcd.setCursor(60, 10);
-      M5.Lcd.printf("%02d:%02d:%02d", time_h, time_m, time_s);
+    case 0:      
+      M5.Lcd.fillRect(0, 32, 320, 180, LCD_MAIN);
+      M5.Lcd.drawFastHLine(0, 77, 320, LCD_LINE);
+      M5.Lcd.drawFastHLine(0, 122, 320, LCD_LINE);
+      M5.Lcd.drawFastHLine(0, 167, 320, LCD_LINE);
+      lcd_pattern = 1;
+      break;
+    case 1:    
+      M5.Lcd.setCursor(10, 47);
+      M5.Lcd.printf("X0"); 
+      if( angle_can_x0 > ANGLE_TOLERANCE || angle_can_x0 < ANGLE_TOLERANCE*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);   
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN); 
+      M5.Lcd.setCursor(50, 47);
+      M5.Lcd.printf("%+05.2f", angle_can_x0); 
+      if( torque_x0 > TORQUE_TOLERANCE_X || torque_x0 < TORQUE_TOLERANCE_X*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);        
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN);      
+      M5.Lcd.setCursor(130, 47);
+      M5.Lcd.printf("%+03.2f", torque_x0);   
+      if( level_x0 > I_TORQUE_TOLERANCE_X || level_x0 < I_TORQUE_TOLERANCE_X*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);        
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN);      
+      M5.Lcd.setCursor(230, 47);
+      M5.Lcd.printf("%+04d", level_x0);   
+      lcd_pattern = 2;
+      //lcd_flag = false; 
+      break;
+    case 2:    
+      M5.Lcd.setCursor(10, 92);
+      M5.Lcd.printf("X1"); 
+      if( angle_can_x1 > ANGLE_TOLERANCE || angle_can_x1 < ANGLE_TOLERANCE*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);   
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN); 
+      M5.Lcd.setCursor(50, 92);
+      M5.Lcd.printf("%+05.2f", angle_can_x1); 
+      if( torque_x1 > TORQUE_TOLERANCE_X || torque_x1 < TORQUE_TOLERANCE_X*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);        
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN);      
+      M5.Lcd.setCursor(130, 92);
+      M5.Lcd.printf("%+03.2f", torque_x1);   
+      if( level_x1 > I_TORQUE_TOLERANCE_X || level_x1 < I_TORQUE_TOLERANCE_X*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);        
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN);      
+      M5.Lcd.setCursor(230, 92);
+      M5.Lcd.printf("%+04d", level_x1);   
+      lcd_pattern = 3;
+      //lcd_flag = false; 
+      break;
+    case 3:    
+      M5.Lcd.setCursor(10, 137);
+      M5.Lcd.printf("Y0"); 
+      if( angle_can_y0 > ANGLE_TOLERANCE || angle_can_y0 < ANGLE_TOLERANCE*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);   
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN); 
+      M5.Lcd.setCursor(50, 137);
+      M5.Lcd.printf("%+05.2f", angle_can_y0); 
+      if( torque_y0 > TORQUE_TOLERANCE_Y || torque_y0 < TORQUE_TOLERANCE_Y*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);        
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN);      
+      M5.Lcd.setCursor(130, 137);
+      M5.Lcd.printf("%+03.2f", torque_y0);   
+      if( level_y0 > I_TORQUE_TOLERANCE_Y || level_y0 < I_TORQUE_TOLERANCE_Y*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);        
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN);      
+      M5.Lcd.setCursor(230, 137);
+      M5.Lcd.printf("%+04d", level_y0);   
+      lcd_pattern = 4;
+      //lcd_flag = false; 
+      break;
+    case 4:    
+      M5.Lcd.setCursor(10, 182);
+      M5.Lcd.printf("Y1"); 
+      if( angle_can_y1 > ANGLE_TOLERANCE || angle_can_y1 < ANGLE_TOLERANCE*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);   
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN); 
+      M5.Lcd.setCursor(50, 182);
+      M5.Lcd.printf("%+05.2f", angle_can_y1); 
+      if( torque_y1 > TORQUE_TOLERANCE_Y || torque_y1 < TORQUE_TOLERANCE_Y*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);        
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN);      
+      M5.Lcd.setCursor(130, 182);
+      M5.Lcd.printf("%+03.2f", torque_y1);   
+      if( level_y1 > I_TORQUE_TOLERANCE_Y || level_y1 < I_TORQUE_TOLERANCE_Y*-1 ) M5.Lcd.setTextColor(LCD_RED, LCD_MAIN);        
+      else M5.Lcd.setTextColor(LCD_GREEN, LCD_MAIN);      
+      M5.Lcd.setCursor(230, 182);
+      M5.Lcd.printf("%+04d", level_y1);   
+      lcd_pattern = 1;
       lcd_flag = false; 
       break;
-
+    // Initialize
+    case 10:      
+      M5.Lcd.fillRect(0, 32, 320, 180, LCD_MAIN);
+      lcd_pattern = 11;
+      lcd_flag = false; 
+    case 11:      
+      M5.Lcd.setTextColor(WHITE, LCD_MAIN);
+      M5.Lcd.setCursor(30, 100);
+      M5.Lcd.printf("Initializing X0...");      
+      M5.Lcd.progressBar(20,150,280,10, progress_value);
+      lcd_flag = false; 
+      break;
+    case 12:      
+      M5.Lcd.setTextColor(WHITE, LCD_MAIN);
+      M5.Lcd.setCursor(30, 100);
+      M5.Lcd.printf("Initializing X1...");      
+      M5.Lcd.progressBar(20,150,280,10, progress_value);
+      lcd_flag = false; 
+      break;
+    case 13:      
+      M5.Lcd.setTextColor(WHITE, LCD_MAIN);
+      M5.Lcd.setCursor(30, 100);
+      M5.Lcd.printf("Initializing Y0...");      
+      M5.Lcd.progressBar(20,150,280,10, progress_value);
+      lcd_flag = false; 
+      break;
+    case 14:      
+      M5.Lcd.setTextColor(WHITE, LCD_MAIN);
+      M5.Lcd.setCursor(30, 100);
+      M5.Lcd.printf("Initializing Y1...");      
+      M5.Lcd.progressBar(20,150,280,10, progress_value);
+      lcd_flag = false; 
+      break;
+    case 15:      
+      M5.Lcd.setTextColor(WHITE, LCD_MAIN);
+      M5.Lcd.setCursor(30, 100);
+      M5.Lcd.printf("Complete!");      
+      lcd_flag = false; 
+      break;
+    // Homing
+    case 20:      
+      M5.Lcd.fillRect(0, 32, 320, 180, LCD_MAIN);
+      lcd_pattern = 21;
+      lcd_flag = false; 
+    case 21:      
+      M5.Lcd.setTextColor(WHITE, LCD_MAIN);
+      M5.Lcd.setCursor(30, 100);
+      M5.Lcd.printf("Homing...");      
+      lcd_flag = false; 
+      break;
     }
   }
 }
@@ -571,11 +1055,33 @@ void lcdDisplay(void) {
 
 // Button Action
 //------------------------------------------------------------------//
-void button_action() {
+void button_action(void) {
   M5.update();
   if (M5.BtnA.wasPressed()) {
-
-  } else if (M5.BtnB.wasPressed()) {    
+    if(pattern == 0) {
+      Serial.printf("\n\n Initializing...\n\n");
+      pattern = 201;
+    }
+  } else if (M5.BtnB.wasPressed()) {   
+    if(pattern == 0) {
+      Serial.printf("\n\n");
+      initial_angle_x0 = angle_can_x0;
+      initial_angle_x1 = angle_can_x1;
+      initial_angle_y0 = angle_can_y0;
+      initial_angle_y1 = angle_can_y1;
+      iI_x0 = 0;       
+      iBefore_x0 = 0;
+      iI_x1 = 0;       
+      iBefore_x1 = 0;
+      iI_y0 = 0;       
+      iBefore_y0 = 0;
+      iI_y1 = 0;       
+      iBefore_y1 = 0;
+      lcd_pattern = 20;
+      pattern = 101;
+      tx_pattern = 202;
+      rx_pattern = 0;
+    }
    
   } else if (M5.BtnC.wasPressed()) {  
 
@@ -584,29 +1090,163 @@ void button_action() {
 
 // ServoControl
 //------------------------------------------------------------------//
-void servoControl(float ang){
+void servoControlX0(float ang){
   float i;
-  int iRet, dt, preTime;
+  int iRet;
+  
+  if(interrupt_flag_x0) {
+    i = ang - angle_can_x0;
+    iP_x0 = cons_kp * i;
+    iI_x0 += (float)cons_ki / 1000 * i;
+    iD_x0 = cons_kd * (angle_can_x0 - iBefore_x0) * 1000;
+    iRet = iP_x0 + iI_x0 + iD_x0;
+    iBefore_x0 = angle_can_x0;
+    if( iRet > 20000 ) iRet = 20000;
+    if( iRet < -20000 ) iRet = -20000;
+    servo_x0_output = iRet;  
+    interrupt_flag_x0 = false;
+  }
+}
 
-  dt = (micros() - preTime) / 1000000;
-  preTime = micros();
+// ServoControl
+//------------------------------------------------------------------//
+void servoControlX1(float ang){
+  float i;
+  int iRet;
+  
+  if(interrupt_flag_x1) {
+    i = ang - angle_can_x1;
+    iP_x1 = cons_kp * i;
+    iI_x1 += (float)cons_ki / 1000 * i;
+    iD_x1 = cons_kd * (angle_can_x1 - iBefore_x1) * 1000;
+    iRet = iP_x1 + iI_x1 + iD_x1;
+    iBefore_x1 = angle_can_x1;
+    if( iRet > 20000 ) iRet = 20000;
+    if( iRet < -20000 ) iRet = -20000;
+    servo_x1_output = iRet;  
+    interrupt_flag_x1 = false;
+  }
+}
 
-  i = ang - angle;
-  iP = kp * i;
-  iI += ki * i;
-  iD = kd * (i - iBefore);
-  iRet = iP + iI + iD;
-  if( iRet > 30000 ) iRet = 30000;
-  if( iRet < -30000 ) iRet = -30000;
-  power1 = iRet;  
+// ServoControl
+//------------------------------------------------------------------//
+void servoControlY0(float ang){
+  float i;
+  int iRet;
+  
+  if(interrupt_flag_y0) {
+    i = ang - angle_can_y0;
+    iP_y0 = cons_kp * i;
+    iI_y0 += (float)cons_ki / 1000 * i;
+    iD_y0 = cons_kd * (angle_can_y0 - iBefore_y0) * 1000;
+    iRet = iP_y0 + iI_y0 + iD_y0;
+    iBefore_y0 = angle_can_y0;
+    if( iRet > 20000 ) iRet = 20000;
+    if( iRet < -20000 ) iRet = -20000;
+    servo_y0_output = iRet;  
+    interrupt_flag_y0 = false;
+  }
+}
+
+// ServoControl
+//------------------------------------------------------------------//
+void servoControlY1(float ang){
+  float i;
+  int iRet;
+  
+  if(interrupt_flag_y1) {
+    i = ang - angle_can_y1;
+    iP_y1 = cons_kp * i;
+    iI_y1 += (float)cons_ki / 1000 * i;
+    iD_y1 = cons_kd * (angle_can_y1 - iBefore_y1) * 1000;
+    iRet = iP_y1 + iI_y1 + iD_y1;
+    iBefore_y1 = angle_can_y1;
+    if( iRet > 20000 ) iRet = 20000;
+    if( iRet < -20000 ) iRet = -20000;
+    servo_y1_output = iRet;  
+    interrupt_flag_y1 = false;
+  }
+}
+
+// TargetAngle Calculate
+//------------------------------------------------------------------//
+void targetAngleX0(float tang){
+
+  if (interrupt_flag2_x0) {
+    if(angle_can_x0 > (tang + 1)) {
+      initial_angle_x0 -= 0.01;
+      target_angle_x0 = initial_angle_x0;
+    } else if(angle_can_x0 < (tang - 1)
+    ) {
+      initial_angle_x0 += 0.01;
+      target_angle_x0 = initial_angle_x0;
+    } else {
+      target_angle_x0 = tang;
+    }
+    interrupt_flag2_x0 = false;
+  }
+}
+
+// TargetAngle Calculate
+//------------------------------------------------------------------//
+void targetAngleX1(float tang){
+
+  if (interrupt_flag2_x1) {
+    if(angle_can_x1 > (tang + 1)) {
+      initial_angle_x1 -= 0.01;
+      target_angle_x1 = initial_angle_x1;
+    } else if(angle_can_x1 < (tang - 1)
+    ) {
+      initial_angle_x1 += 0.01;
+      target_angle_x1 = initial_angle_x1;
+    } else {
+      target_angle_x1 = tang;
+    }
+    interrupt_flag2_x1 = false;
+  }
+}
+
+// TargetAngle Calculate
+//------------------------------------------------------------------//
+void targetAngleY0(float tang){
+
+  if (interrupt_flag2_y0) {
+    if(angle_can_y0 > (tang + 1)) {
+      initial_angle_y0 -= 0.01;
+      target_angle_y0 = initial_angle_y0;
+    } else if(angle_can_y0 < (tang - 1)
+    ) {
+      initial_angle_y0 += 0.01;
+      target_angle_y0 = initial_angle_y0;
+    } else {
+      target_angle_y0 = tang;
+    }
+    interrupt_flag2_y0 = false;
+  }
+}
+
+// TargetAngle Calculate
+//------------------------------------------------------------------//
+void targetAngleY1(float tang){
+
+  if (interrupt_flag2_y1) {
+    if(angle_can_y1 > (tang + 1)) {
+      initial_angle_y1 -= 0.01;
+      target_angle_y1 = initial_angle_y1;
+    } else if(angle_can_y1 < (tang - 1)
+    ) {
+      initial_angle_y1 += 0.01;
+      target_angle_y1 = initial_angle_y1;
+    } else {
+      target_angle_y1 = tang;
+    }
+    interrupt_flag2_y1 = false;
+  }
 }
 
 // Initialize CAN
 //------------------------------------------------------------------//
-void init_can(){
-  M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(0, 10);
-  delay(500);
+void init_can(void){
 
   // Initialize MCP2515 running at 16MHz with a baudrate of 500kb/s and the masks and filters disabled.
   CAN0.begin(MCP_ANY, CAN_1000KBPS, MCP_8MHZ);
@@ -619,59 +1259,86 @@ void init_can(){
 
 // Test CAN
 //------------------------------------------------------------------//
-void test_can(){
+void test_can(void){
 
-  data[0] = power1 >> 8 & 0xFF;
-  data[1] = power1 & 0xFF;
-  data[2] = power2 >> 8 & 0xFF;
-  data[3] = power2 & 0xFF;
-  data[4] = power3 >> 8 & 0xFF;
-  data[5] = power3 & 0xFF;
-  data[6] = power4 >> 8 & 0xFF;
-  data[7] = power4 & 0xFF;
+  byte angle_H;
+  byte angle_L;
+  byte velocity_H;
+  byte velocity_L;
+  byte torque_H;
+  byte torque_L;
+  byte temp_L;
+
+  int angle_buff;
+  int torque_buff;
+
+  data[0] = power_x1 >> 8 & 0xFF;
+  data[1] = power_x1 & 0xFF;
+  data[2] = power_x0 >> 8 & 0xFF;
+  data[3] = power_x0 & 0xFF;
+  data[4] = power_y0 >> 8 & 0xFF;
+  data[5] = power_y0 & 0xFF;
+  data[6] = power_y1 >> 8 & 0xFF;
+  data[7] = power_y1 & 0xFF;
   CAN0.sendMsgBuf(0x1FF, 0, 8, data);
 
   if(!digitalRead(CAN0_INT)) // If CAN0_INT pin is low, read receive buffer
   {
     CAN0.readMsgBuf(&rxId, &len, rxBuf); // Read data: len = data length, buf = data byte(s)
-  
-      for(byte i = 0; i<len; i++){
-        //sprintf(msgString, " 0x%.2X", rxBuf[i]);
-        //M5.Lcd.printf(msgString);
-        switch (i) {
-        case 0:
-          angle_H = rxBuf[i];
-          break;
-        case 1:
-          angle_L = rxBuf[i];
-          break;
-        case 2:
-          velocity_H = rxBuf[i];
-          break;
-        case 3:
-          velocity_L = rxBuf[i];
-          break;
-        case 4:
-          torque_H = rxBuf[i];
-          break;
-        case 5:
-          torque_L = rxBuf[i];
-          break;
-        case 6:
-          temp_L = rxBuf[i];
-          break;
-        case 7:
-          break;
-        }
+
+    for(byte i = 0; i<len; i++){
+      switch (i) {
+      case 0:
+        angle_H = rxBuf[i];
+        break;
+      case 1:
+        angle_L = rxBuf[i];
+        break;
+      case 2:
+        velocity_H = rxBuf[i];
+        break;
+      case 3:
+        velocity_L = rxBuf[i];
+        break;
+      case 4:
+        torque_H = rxBuf[i];
+        break;
+      case 5:
+        torque_L = rxBuf[i];
+        break;
+      case 6:
+        temp_L = rxBuf[i];
+        break;
+      case 7:
+        break;
       }
-      angle_buff = ((angle_H << 8) | angle_L & 0xFF);
-      angle = (float)angle_buff * 360/8192-180;
-      velocity = ((velocity_H << 8) | velocity_L & 0xFF);
-      torque_buff = ((torque_H << 8) | torque_L & 0xFF)*741/1000;
-      if( torque_buff > -20000 && torque_buff < 20000 ) {
-        torque = float(torque_buff) / 10;
-      }
-      temp = temp_L; 
+    }
+    angle_buff = ((angle_H << 8) | angle_L & 0xFF);
+    torque_buff = ((torque_H << 8) | torque_L & 0xFF)*741/1000;
+    if( rxId == 0x206 ) {  
+      angle_can_x0 = (float)angle_buff * 360/8192-180;
+      velocity_can_x0 = ((velocity_H << 8) | velocity_L & 0xFF);     
+      torque_can_x0 = float(torque_buff) / 10;
+      temp_can_x0 = temp_L; 
+    }
+    if( rxId == 0x205 ) {  
+      angle_can_x1 = (float)angle_buff * 360/8192-180;
+      velocity_can_x1 = ((velocity_H << 8) | velocity_L & 0xFF);     
+      torque_can_x1 = float(torque_buff) / 10;
+      temp_can_x1 = temp_L; 
+    }
+    if( rxId == 0x207 ) {  
+      angle_can_y0 = (float)angle_buff * 360/8192-180;
+      velocity_can_y0 = ((velocity_H << 8) | velocity_L & 0xFF);     
+      torque_can_y0 = float(torque_buff) / 10;
+      temp_can_y0 = temp_L; 
+    }
+    if( rxId == 0x208 ) {  
+      angle_can_y1 = (float)angle_buff * 360/8192-180;
+      velocity_can_y1 = ((velocity_H << 8) | velocity_L & 0xFF);     
+      torque_can_y1 = float(torque_buff) / 10;
+      temp_can_y1 = temp_L; 
+    }
   }
 }
 
@@ -707,7 +1374,7 @@ void AE_HX711_Reset(void)
 
 //AE HX711 Read
 //------------------------------------------------------------------//
-void AE_HX711_Read( void )
+void AE_HX711_Read(void)
 {
   long data=0;
   int sum = 0;  
@@ -739,6 +1406,8 @@ void AE_HX711_Read( void )
         sum += buffer_x0[i];
       }
       level_x0 = sum / AVERATING_BUFFER_SIZE;
+
+      torque_x0 = native_data_x0 * coefficient_x0 / 1000;
       hx711_pattern = 1;
       hx711_flag = false;
       digitalWrite(ledPin, led_flag);  
@@ -771,6 +1440,8 @@ void AE_HX711_Read( void )
         sum += buffer_x1[i];
       }
       level_x1 = sum / AVERATING_BUFFER_SIZE;
+
+      torque_x1 = native_data_x1 * coefficient_x1 / 1000;
       hx711_pattern = 2;
       hx711_flag = false;
       digitalWrite(ledPin, led_flag);  
@@ -803,6 +1474,8 @@ void AE_HX711_Read( void )
         sum += buffer_y0[i];
       }
       level_y0 = sum / AVERATING_BUFFER_SIZE;
+
+      torque_y0 = native_data_y0 * coefficient_y0 / 1000;
       hx711_pattern = 3;
       hx711_flag = false;
       digitalWrite(ledPin, led_flag);  
@@ -835,6 +1508,8 @@ void AE_HX711_Read( void )
         sum += buffer_y1[i];
       }
       level_y1 = sum / AVERATING_BUFFER_SIZE;
+
+      torque_y1 = native_data_y1 * coefficient_y1 / 1000;
       hx711_pattern = 0;
       hx711_flag = false;
       digitalWrite(ledPin, led_flag);  
@@ -857,8 +1532,11 @@ void getOffsetValue(void) {
   averating_data_y1_buffer = 0;
   averating_data_y1 = 0;
   millis_buffer = millis();
+
+  lcd_pattern = 10;
   
   for(int i=0; i<INITIALIZEING_SAMPLE; i++) {
+    progress_value = i;
     millis_buffer = millis();
     averating_data_x0_buffer += native_data_x0;       
     if(i==INITIALIZEING_SAMPLE-1) {
@@ -889,7 +1567,12 @@ void getOffsetValue(void) {
   averating_data_x0 = averating_data_x0_buffer / INITIALIZEING_SAMPLE;
   Serial.printf(" X0 offset value = %d\n\n", averating_data_x0);  
 
+  while(lcd_flag);
+  M5.Lcd.fillRect(20,150,280,10,LCD_MAIN);
+  lcd_pattern = 12;
+
   for(int i=0; i<INITIALIZEING_SAMPLE; i++) {
+    progress_value = i;
     millis_buffer = millis();
     averating_data_x1_buffer += native_data_x1;   
     if(i==INITIALIZEING_SAMPLE-1) {
@@ -918,9 +1601,14 @@ void getOffsetValue(void) {
     while( millis() - millis_buffer < 15);
   }  
   averating_data_x1 = averating_data_x1_buffer / INITIALIZEING_SAMPLE;
-  Serial.printf(" X1 offset value = %d\n\n", averating_data_x1);  
+  Serial.printf(" X1 offset value = %d\n\n", averating_data_x1); 
+
+  while(lcd_flag);
+  M5.Lcd.fillRect(20,150,280,10,LCD_MAIN);
+  lcd_pattern = 13; 
 
   for(int i=0; i<INITIALIZEING_SAMPLE; i++) {
+    progress_value = i;
     millis_buffer = millis();
     averating_data_y0_buffer += native_data_y0;   
     if(i==INITIALIZEING_SAMPLE-1) {
@@ -951,7 +1639,12 @@ void getOffsetValue(void) {
   averating_data_y0 = averating_data_y0_buffer / INITIALIZEING_SAMPLE;
   Serial.printf(" Y0 offset value = %d\n\n", averating_data_y0);  
 
+  while(lcd_flag);
+  M5.Lcd.fillRect(20,150,280,10,LCD_MAIN);
+  lcd_pattern = 14;
+
   for(int i=0; i<INITIALIZEING_SAMPLE; i++) {
+    progress_value = i;
     millis_buffer = millis();
     averating_data_y1_buffer += native_data_y1;  
     
@@ -983,6 +1676,10 @@ void getOffsetValue(void) {
   averating_data_y1 = averating_data_y1_buffer / INITIALIZEING_SAMPLE;
   Serial.printf(" Y1 offset value = %d\n\n", averating_data_y1);  
 
+  while(lcd_flag);
+  M5.Lcd.fillRect(20,150,280,10,LCD_MAIN);
+  lcd_pattern = 15;
+
   Serial.printf(" Initialization complete\n");  
 
   tx_pattern = 1;
@@ -1008,6 +1705,7 @@ void getCalibrationDataX0(void) {
     while(!M5.BtnA.isPressed());
     averating_data_x0_buffer = 0;
     for(int i=0; i<INITIALIZEING_SAMPLE; i++) {
+      progress_value = i;
       millis_buffer = millis();
       averating_data_x0_buffer += native_data_x0; 
       if(i==INITIALIZEING_SAMPLE-1) {
@@ -1038,10 +1736,28 @@ void getCalibrationDataX0(void) {
     calibration_factor_x0[j] = averating_data_x0_buffer / INITIALIZEING_SAMPLE;  
   }
 
-  Serial.printf(" Calibration Result\n\n");  
-  for(int i=0; i<11; i++) {
-    Serial.printf("%2d, %10d\n", i, calibration_factor_x0[i]);  
+  for (int i=0; i<11; i++) {
+    Serial.printf(" %d, %f\n", calibration_factor_x0[i], load_step_x[i]); 
   }
+
+  float sum_xy = 0, sum_x = 0, sum_y = 0, sum_x2 = 0;
+
+  for (int i=0; i<11; i++) {
+    sum_xy += calibration_factor_x0[i] * load_step_x[i];
+    sum_x += calibration_factor_x0[i];
+    sum_y += load_step_x[i];
+    sum_x2 += pow(calibration_factor_x0[i], 2);
+  }
+  
+  coefficient_x0 = (11 * sum_xy - sum_x * sum_y) / (11 * sum_x2 - pow(sum_x, 2));
+  intercept_x0 = (sum_x2 * sum_y - sum_xy * sum_x) / (11 * sum_x2 - pow(sum_x, 2));
+
+  coefficient_x0_eeprom = coefficient_x0 * 1000000;
+  intercept_x0_eeprom = intercept_x0 * 1000;
+
+  eeprom_write();
+
+  Serial.printf(" Coefficient = %f, Intercept = %f\n\n", coefficient_x0, intercept_x0);    
   tx_pattern = 1;  
   
 }
@@ -1065,6 +1781,7 @@ void getCalibrationDataX1(void) {
     while(!M5.BtnA.isPressed());
     averating_data_x1_buffer = 0;
     for(int i=0; i<INITIALIZEING_SAMPLE; i++) {
+      progress_value = i;
       millis_buffer = millis();
       averating_data_x1_buffer += native_data_x1; 
       if(i==INITIALIZEING_SAMPLE-1) {
@@ -1095,10 +1812,28 @@ void getCalibrationDataX1(void) {
     calibration_factor_x1[j] = averating_data_x1_buffer / INITIALIZEING_SAMPLE;  
   }
 
-  Serial.printf(" Calibration Result\n\n");  
-  for(int i=0; i<11; i++) {
-    Serial.printf("%2d, %10d\n", i, calibration_factor_x1[i]);  
+  for (int i=0; i<11; i++) {
+    Serial.printf(" %d, %f\n", calibration_factor_x1[i], load_step_x[i]); 
   }
+
+  float sum_xy = 0, sum_x = 0, sum_y = 0, sum_x2 = 0;
+
+  for (int i=0; i<11; i++) {
+    sum_xy += calibration_factor_x1[i] * load_step_x[i];
+    sum_x += calibration_factor_x1[i];
+    sum_y += load_step_x[i];
+    sum_x2 += pow(calibration_factor_x1[i], 2);
+  }
+  
+  coefficient_x1 = (11 * sum_xy - sum_x * sum_y) / (11 * sum_x2 - pow(sum_x, 2));
+  intercept_x1 = (sum_x2 * sum_y - sum_xy * sum_x) / (11 * sum_x2 - pow(sum_x, 2));
+
+  coefficient_x1_eeprom = coefficient_x1 * 1000000;
+  intercept_x1_eeprom = intercept_x1 * 1000;
+
+  eeprom_write();
+
+  Serial.printf(" Coefficient = %f, Intercept = %f\n\n", coefficient_x1, intercept_x1);    
   tx_pattern = 1;  
   
 }
@@ -1122,6 +1857,7 @@ void getCalibrationDataY0(void) {
     while(!M5.BtnA.isPressed());
     averating_data_y0_buffer = 0;
     for(int i=0; i<INITIALIZEING_SAMPLE; i++) {
+      progress_value = i;
       millis_buffer = millis();
       averating_data_y0_buffer += native_data_y0; 
       if(i==INITIALIZEING_SAMPLE-1) {
@@ -1152,6 +1888,10 @@ void getCalibrationDataY0(void) {
     calibration_factor_y0[j] = averating_data_y0_buffer / INITIALIZEING_SAMPLE;  
   }
 
+  for (int i=0; i<11; i++) {
+    Serial.printf(" %d, %f\n", calibration_factor_y0[i], load_step_y[i]); 
+  }
+
   float sum_xy = 0, sum_x = 0, sum_y = 0, sum_x2 = 0;
 
   for (int i=0; i<11; i++) {
@@ -1164,13 +1904,12 @@ void getCalibrationDataY0(void) {
   coefficient_y0 = (11 * sum_xy - sum_x * sum_y) / (11 * sum_x2 - pow(sum_x, 2));
   intercept_y0 = (sum_x2 * sum_y - sum_xy * sum_x) / (11 * sum_x2 - pow(sum_x, 2));
 
+  coefficient_y0_eeprom = coefficient_y0 * 1000000;
+  intercept_y0_eeprom = intercept_y0 * 1000;
 
-  Serial.printf(" Calibration Result\n\n");  
-  for(int i=0; i<11; i++) {
-    Serial.printf(" %10d, %3.3f\n", calibration_factor_y0[i], load_step_y[i]);  
-  }
+  eeprom_write();
 
-  Serial.printf("\n Coefficient = %f, Intercept = %f\n\n", coefficient_y0, intercept_y0);  
+  Serial.printf(" Coefficient = %f, Intercept = %f\n\n", coefficient_y0, intercept_y0);    
   tx_pattern = 1;  
 
   
@@ -1195,6 +1934,7 @@ void getCalibrationDataY1(void) {
     while(!M5.BtnA.isPressed());
     averating_data_y1_buffer = 0;
     for(int i=0; i<INITIALIZEING_SAMPLE; i++) {
+      progress_value = i;
       millis_buffer = millis();
       averating_data_y1_buffer += native_data_y1; 
       if(i==INITIALIZEING_SAMPLE-1) {
@@ -1225,10 +1965,28 @@ void getCalibrationDataY1(void) {
     calibration_factor_y1[j] = averating_data_y1_buffer / INITIALIZEING_SAMPLE;  
   }
 
-  Serial.printf(" Calibration Result\n\n");  
-  for(int i=0; i<11; i++) {
-    Serial.printf("%2d, %10d\n", i, calibration_factor_y1[i]);  
+  for (int i=0; i<11; i++) {
+    Serial.printf(" %d, %f\n", calibration_factor_y1[i], load_step_y[i]); 
   }
+
+  float sum_xy = 0, sum_x = 0, sum_y = 0, sum_x2 = 0;
+
+  for (int i=0; i<11; i++) {
+    sum_xy += calibration_factor_y1[i] * load_step_y[i];
+    sum_x += calibration_factor_y1[i];
+    sum_y += load_step_y[i];
+    sum_x2 += pow(calibration_factor_y1[i], 2);
+  }
+  
+  coefficient_y1 = (11 * sum_xy - sum_x * sum_y) / (11 * sum_x2 - pow(sum_x, 2));
+  intercept_y1 = (sum_x2 * sum_y - sum_xy * sum_x) / (11 * sum_x2 - pow(sum_x, 2));
+
+  coefficient_y1_eeprom = coefficient_y1 * 1000000;
+  intercept_y1_eeprom = intercept_y1 * 1000;
+
+  eeprom_write();
+
+  Serial.printf(" Coefficient = %f, Intercept = %f\n\n", coefficient_y1, intercept_y1);    
   tx_pattern = 1;  
   
 }
@@ -1261,3 +2019,4 @@ void IRAM_ATTR onTimer() {
   interruptCounter=1;
   portEXIT_CRITICAL_ISR(&timerMux);
 }
+
