@@ -37,11 +37,17 @@
 #define INITIALIZEING_SAMPLE 100
 #define CALIBRATION_PERIOD 15
 
+#define STABLE_TIME 2000                        // ms
+#define LOG_TIME 1000                           // ms
+
 #define TORQUE_TOLERANCE_X 0.5
 #define I_TORQUE_TOLERANCE_X 50
 #define TORQUE_TOLERANCE_Y 10
 #define I_TORQUE_TOLERANCE_Y 1000
 #define ANGLE_TOLERANCE 1.0
+
+#define YAXIS_MAX_ANGLE 45
+#define YAXIS_MIN_ANGLE -42
 
 //Global
 //------------------------------------------------------------------//
@@ -79,6 +85,7 @@ volatile bool  lcd_flag = false;
 volatile unsigned int millis_buffer = 0;
 bool init_flag = false;
 char progress_value = 0;
+volatile bool log_flag = false;
 
 float target_angle_x0;
 float target_angle_x1;
@@ -89,6 +96,9 @@ float initial_angle_x0;
 float initial_angle_x1;
 float initial_angle_y0;
 float initial_angle_y1;
+
+float angle_x;
+float angle_y;
 
 int step_angle_x = 0;
 int step_angle_y = 0;
@@ -125,12 +135,13 @@ float iBefore_y0;
 int iP_y1, iD_y1;
 float iI_y1;
 float iBefore_y1;
-int agg_kp = 200;
+int agg_kp = 1500;
 int agg_ki = 0;
-int agg_kd = 0;
-int cons_kp = 1000;
+int agg_kd = 1;
+int cons_kp = 500;
 int cons_ki = 0;
 int cons_kd = 1;
+
 
 
 // WiFi credentials.
@@ -258,14 +269,16 @@ void lcdDisplay(void);
 void taskDisplay(void *pvParameters);
 void IRAM_ATTR onTimer(void);
 void TimerInterrupt(void);
-void servoControlX0(float ang);
-void servoControlX1(float ang);
-void servoControlY0(float ang);
-void servoControlY1(float ang);
+void servoControlX0(float ang, bool range);
+void servoControlX1(float ang, bool range);
+void servoControlY0(float ang, bool range);
+void servoControlY1(float ang, bool range);
 void targetAngleX0(float tang);
 void targetAngleX1(float tang);
 void targetAngleY0(float tang);
 void targetAngleY1(float tang);
+void stepAngleX(float sang);
+void stepAngleY(float sang);
 void AE_HX711_Init(void);
 void AE_HX711_Reset(void);
 void AE_HX711_Read(void);
@@ -363,21 +376,152 @@ void loop() {
   // Start Sequence
   case 11:
     targetAngleX0(0); 
-    servoControlX0(target_angle_x0);  
+    targetAngleX1(0); 
+    servoControlX0(target_angle_x0, 0);  
+    servoControlX1(target_angle_x1, 0);  
     power_x0 = servo_x0_output;
-    if(angle_can_x0 > -1.0 && angle_can_x0 < 1.0) {
+    power_x1 = servo_x1_output;
+    if(angle_can_x0 > -ANGLE_TOLERANCE && angle_can_x0 < ANGLE_TOLERANCE && angle_can_x1 > -ANGLE_TOLERANCE && angle_can_x1 < ANGLE_TOLERANCE) {
       pattern = 12;
     }
     break;
     
   case 12:
-    servoControlX0(step_angle_x);  
+    servoControlX0(0, 0); 
+    servoControlX1(0, 0);   
     power_x0 = servo_x0_output;
+    power_x1 = servo_x1_output;
+    servoControlY0(0, 0);  
+    servoControlY1(0, 0);  
+    power_y0 = servo_y0_output;
+    power_y1 = servo_y1_output;
+    if(angle_can_y0 > -ANGLE_TOLERANCE && angle_can_y0 < ANGLE_TOLERANCE && angle_can_y1 > -ANGLE_TOLERANCE && angle_can_y1 < ANGLE_TOLERANCE) {
+      millis_buffer = millis();
+      pattern = 13;
+    }
     break;
+
+  case 13:
+    servoControlX0(0, 1); 
+    servoControlX1(0, 1);   
+    power_x0 = servo_x0_output;
+    power_x1 = servo_x1_output;
+    servoControlY0(0, 1);  
+    servoControlY1(0, 1);  
+    power_y0 = servo_y0_output;
+    power_y1 = servo_y1_output;    
+    if(millis() - millis_buffer > STABLE_TIME) {
+      pattern = 14;
+    }
+    break;
+
+  case 14:
+    servoControlX0(0, 1); 
+    servoControlX1(0, 1);   
+    power_x0 = servo_x0_output;
+    power_x1 = servo_x1_output;
+    stepAngleY(YAXIS_MAX_ANGLE);
+    servoControlY0(step_angle_y, 1);  
+    servoControlY1(step_angle_y, 1);  
+    power_y0 = servo_y0_output;
+    power_y1 = servo_y1_output;
+    if(step_angle_y >= YAXIS_MAX_ANGLE) {
+      pattern = 15;
+    }
+    break;
+
+  case 15:
+    servoControlX0(0, 1); 
+    servoControlX1(0, 1);   
+    power_x0 = servo_x0_output;
+    power_x1 = servo_x1_output;
+    stepAngleY(0);
+    servoControlY0(step_angle_y, 1);  
+    servoControlY1(step_angle_y, 1);  
+    power_y0 = servo_y0_output;
+    power_y1 = servo_y1_output;
+    if(step_angle_y < 0) {
+      pattern = 0;
+    }
+    break;
+
+  // Start Sequence
+  case 21:
+    targetAngleX0(0); 
+    targetAngleX1(0); 
+    servoControlX0(target_angle_x0, 0);  
+    servoControlX1(target_angle_x1, 0);  
+    power_x0 = servo_x0_output;
+    power_x1 = servo_x1_output;
+    if(angle_can_x0 > -ANGLE_TOLERANCE && angle_can_x0 < ANGLE_TOLERANCE && angle_can_x1 > -ANGLE_TOLERANCE && angle_can_x1 < ANGLE_TOLERANCE) {
+      pattern = 22;
+    }
+    break;
+    
+  case 22:
+    servoControlX0(0, 0); 
+    servoControlX1(0, 0);   
+    power_x0 = servo_x0_output;
+    power_x1 = servo_x1_output;
+    servoControlY0(0, 0);  
+    servoControlY1(0, 0);  
+    power_y0 = servo_y0_output;
+    power_y1 = servo_y1_output;
+    if(angle_can_y0 > -ANGLE_TOLERANCE && angle_can_y0 < ANGLE_TOLERANCE && angle_can_y1 > -ANGLE_TOLERANCE && angle_can_y1 < ANGLE_TOLERANCE) {
+      millis_buffer = millis();
+      pattern = 23;
+    }
+    break;
+
+  case 23:
+    servoControlX0(0, 1); 
+    servoControlX1(0, 1);   
+    power_x0 = servo_x0_output;
+    power_x1 = servo_x1_output;
+    servoControlY0(0, 1);  
+    servoControlY1(0, 1);  
+    power_y0 = servo_y0_output;
+    power_y1 = servo_y1_output;
+    if(millis() - millis_buffer > STABLE_TIME) {
+      pattern = 24;
+    }
+    break;
+
+  case 24:
+    servoControlX0(0, 1); 
+    servoControlX1(0, 1);   
+    power_x0 = servo_x0_output;
+    power_x1 = servo_x1_output;
+    stepAngleY(YAXIS_MIN_ANGLE);
+    servoControlY0(step_angle_y, 1);  
+    servoControlY1(step_angle_y, 1);  
+    power_y0 = servo_y0_output;
+    power_y1 = servo_y1_output;
+    if(step_angle_y <= YAXIS_MIN_ANGLE) {
+      pattern = 25;
+    }
+    break;
+
+  case 25:
+    servoControlX0(0, 1); 
+    servoControlX1(0, 1);   
+    power_x0 = servo_x0_output;
+    power_x1 = servo_x1_output;
+    stepAngleY(0);
+    servoControlY0(step_angle_y, 1);  
+    servoControlY1(step_angle_y, 1);  
+    power_y0 = servo_y0_output;
+    power_y1 = servo_y1_output;
+    if(step_angle_y > 0) {
+      pattern = 0;
+    }
+    break;
+
+
   
   // Set Home Position
   case 101:
-    if(angle_can_x0 > angle_can_x1+1) {
+    if(angle_can_x0 > angle_can_x1+ANGLE_TOLERANCE) {
       if( angle_can_x0 > 0 && angle_can_x1 > 0) {
         pattern = 111;
         break;
@@ -388,7 +532,7 @@ void loop() {
         pattern = 131;
         break;
       }     
-    } else if(angle_can_x0 < angle_can_x1-1) {
+    } else if(angle_can_x0 < angle_can_x1-ANGLE_TOLERANCE) {
       if( angle_can_x0 > 0 && angle_can_x1 > 0) {
         pattern = 121;
         break;
@@ -407,18 +551,18 @@ void loop() {
 
   case 111:
     targetAngleX0(angle_can_x1); 
-    servoControlX0(target_angle_x0);  
+    servoControlX0(target_angle_x0, 0);  
     power_x0 = servo_x0_output;
-    if(angle_can_x0 > angle_can_x1-1 && angle_can_x0 < angle_can_x1+1) {
+    if(angle_can_x0 > angle_can_x1-ANGLE_TOLERANCE && angle_can_x0 < angle_can_x1+ANGLE_TOLERANCE) {
       pattern = 131;
     }
     break;
   
   case 121:
     targetAngleX1(angle_can_x0); 
-    servoControlX1(target_angle_x1);  
+    servoControlX1(target_angle_x1, 0);  
     power_x1 = servo_x1_output;
-    if(angle_can_x1 > angle_can_x0-1 && angle_can_x1 < angle_can_x0+1) {
+    if(angle_can_x1 > angle_can_x0-ANGLE_TOLERANCE && angle_can_x1 < angle_can_x0+ANGLE_TOLERANCE) {
       pattern = 131;
     }
     break;
@@ -426,17 +570,17 @@ void loop() {
   case 131:
     targetAngleX0(0); 
     targetAngleX1(0); 
-    servoControlX0(target_angle_x0);  
-    servoControlX1(target_angle_x1);  
+    servoControlX0(target_angle_x0, 0);  
+    servoControlX1(target_angle_x1, 0);  
     power_x0 = servo_x0_output;
     power_x1 = servo_x1_output;
-    if(angle_can_x0 > -1.0 && angle_can_x0 < 1.0 && angle_can_x1 > -1.0 && angle_can_x1 < 1.0) {
+    if(angle_can_x0 > -ANGLE_TOLERANCE && angle_can_x0 < ANGLE_TOLERANCE && angle_can_x1 > -ANGLE_TOLERANCE && angle_can_x1 < ANGLE_TOLERANCE) {
       pattern = 151;
     }
     break;
 
   case 151:
-    if(angle_can_y0 > angle_can_y1+1) {
+    if(angle_can_y0 > angle_can_y1+ANGLE_TOLERANCE) {
       if( angle_can_y0 > 0 && angle_can_y1 > 0) {
         pattern = 161;
         break;
@@ -447,7 +591,7 @@ void loop() {
         pattern = 181;
         break;
       }     
-    } else if(angle_can_y0 < angle_can_y1-1) {
+    } else if(angle_can_y0 < angle_can_y1-ANGLE_TOLERANCE) {
       if( angle_can_y0 > 0 && angle_can_y1 > 0) {
         pattern = 171;
         break;
@@ -466,18 +610,18 @@ void loop() {
 
   case 161:
     targetAngleY0(angle_can_y1); 
-    servoControlY0(target_angle_y0);  
+    servoControlY0(target_angle_y0, 0);  
     power_y0 = servo_y0_output;
-    if(angle_can_y0 > angle_can_y1-1 && angle_can_y0 < angle_can_y1+1) {
+    if(angle_can_y0 > angle_can_y1-ANGLE_TOLERANCE && angle_can_y0 < angle_can_y1+ANGLE_TOLERANCE) {
       pattern = 181;
     }
     break;
   
   case 171:
     targetAngleY1(angle_can_y0); 
-    servoControlY1(target_angle_y1);  
+    servoControlY1(target_angle_y1, 0);  
     power_y1 = servo_y1_output;
-    if(angle_can_y1 > angle_can_y0-1 && angle_can_y1 < angle_can_y0+1) {
+    if(angle_can_y1 > angle_can_y0-ANGLE_TOLERANCE && angle_can_y1 < angle_can_y0+ANGLE_TOLERANCE) {
       pattern = 181;
     }
     break;
@@ -485,11 +629,11 @@ void loop() {
   case 181:
     targetAngleY0(0); 
     targetAngleY1(0); 
-    servoControlY0(target_angle_y0);  
-    servoControlY1(target_angle_y1);  
+    servoControlY0(target_angle_y0, 0);  
+    servoControlY1(target_angle_y1, 0);  
     power_y0 = servo_y0_output;
     power_y1 = servo_y1_output;
-    if(angle_can_y0 > -1.0 && angle_can_y0 < 1.0 && angle_can_y1 > -1.0 && angle_can_y1 < 1.0) {
+    if(angle_can_y0 > -ANGLE_TOLERANCE && angle_can_y0 < ANGLE_TOLERANCE && angle_can_y1 > -ANGLE_TOLERANCE && angle_can_y1 < ANGLE_TOLERANCE) {
       pattern = 0;
       Serial.printf(" Complete!");
       lcd_pattern = 0;
@@ -564,6 +708,9 @@ void TimerInterrupt( void ){
     interrupt_flag_y1 =  true;
     interrupt_flag2_y1 = true;
 
+    angle_x = angle_can_x0 + angle_can_x1;
+    angle_y = angle_can_y0 + angle_can_y1;
+
     iTimer15++;
     switch (iTimer15) {
     case 1:  
@@ -594,24 +741,35 @@ void TimerInterrupt( void ){
     switch (iTimer50) {
     case 10:
       if( tx_pattern == 101 ) {
-        Serial.printf("%5.2f, ", float(millis()) / 1000); 
-        Serial.printf("%5d, ", pattern); 
-        Serial.printf("%3.2f, ", angle_can_x0); 
-        Serial.printf("%3.2f, ", angle_can_x1); 
-        Serial.printf("%3.2f, ", angle_can_y0); 
-        Serial.printf("%3.2f, ", angle_can_y1); 
-        Serial.printf("%10ld, ", native_data_x0); 
-        Serial.printf("%5d, ", level_x0); 
-        Serial.printf("%10ld, ", native_data_x1); 
-        Serial.printf("%5d, ", level_x1); 
-        Serial.printf("%10ld, ", native_data_y0); 
-        Serial.printf("%5d, ", level_y0); 
-        Serial.printf("%10ld, ", native_data_y1); 
-        Serial.printf("%5d, ", level_y1); 
-        Serial.printf("%5.2f, ", torque_x0); 
-        Serial.printf("%5.2f, ", torque_x1); 
-        Serial.printf("%5.2f, ", torque_y0); 
-        Serial.printf("%5.2f\n", torque_y1); 
+        if(pattern < 30 && pattern != 0) {
+          if(log_flag) {
+            Serial.printf("%5.2f, ", float(millis()) / 1000); 
+            Serial.printf("%5d, ", pattern); 
+            Serial.printf("%3d, ", step_angle_y*2); 
+            Serial.printf("%5.2f, ", angle_y); 
+            Serial.printf("%5.2f, ", torque_y0); 
+            Serial.printf("%5.2f\n", torque_y1); 
+          }
+        } else {
+          Serial.printf("%5.2f, ", float(millis()) / 1000); 
+          Serial.printf("%5d, ", pattern); 
+          Serial.printf("%3.2f, ", angle_can_x0); 
+          Serial.printf("%3.2f, ", angle_can_x1); 
+          Serial.printf("%3.2f, ", angle_can_y0); 
+          Serial.printf("%3.2f, ", angle_can_y1); 
+          Serial.printf("%10ld, ", native_data_x0); 
+          Serial.printf("%5d, ", level_x0); 
+          Serial.printf("%10ld, ", native_data_x1); 
+          Serial.printf("%5d, ", level_x1); 
+          Serial.printf("%10ld, ", native_data_y0); 
+          Serial.printf("%5d, ", level_y0); 
+          Serial.printf("%10ld, ", native_data_y1); 
+          Serial.printf("%5d, ", level_y1); 
+          Serial.printf("%5.2f, ", torque_x0); 
+          Serial.printf("%5.2f, ", torque_x1); 
+          Serial.printf("%5.2f, ", torque_y0); 
+          Serial.printf("%5.2f\n", torque_y1); 
+        }
       }
       break;
     case 20:          
@@ -658,13 +816,50 @@ void SerialRX(void) {
         
       case 11:      
         tx_pattern = 11;
-        rx_pattern = 12;
+        rx_pattern = 101;
         break;
 
-      case 12:
+      case 101:
         if( rx_val == 1 ) {   
-          
+          initial_angle_x0 = angle_can_x0;
+          initial_angle_x1 = angle_can_x1;
+          initial_angle_y0 = angle_can_y0;
+          initial_angle_y1 = angle_can_y1;
+          iI_x0 = 0;       
+          iBefore_x0 = 0;
+          iI_x1 = 0;       
+          iBefore_x1 = 0;
+          iI_y0 = 0;       
+          iBefore_y0 = 0;
+          iI_y1 = 0;       
+          iBefore_y1 = 0;         
           pattern = 11;
+        } else {
+          tx_pattern = 1;
+        }
+        rx_pattern = 0;
+        break;
+
+      case 12:      
+        tx_pattern = 12;
+        rx_pattern = 102;
+        break;
+
+      case 102:
+        if( rx_val == 1 ) {   
+          initial_angle_x0 = angle_can_x0;
+          initial_angle_x1 = angle_can_x1;
+          initial_angle_y0 = angle_can_y0;
+          initial_angle_y1 = angle_can_y1;
+          iI_x0 = 0;       
+          iBefore_x0 = 0;
+          iI_x1 = 0;       
+          iBefore_x1 = 0;
+          iI_y0 = 0;       
+          iBefore_y0 = 0;
+          iI_y1 = 0;       
+          iBefore_y1 = 0;         
+          pattern = 21;
         } else {
           tx_pattern = 1;
         }
@@ -761,7 +956,8 @@ void SerialTX(void) {
       Serial.printf(" Climber Controller (M5Stack version) "
                      "Test Program Ver1.20\n");
       Serial.printf("\n");
-      Serial.printf(" 11 : Start Seqence\n");
+      Serial.printf(" 11 : Start Seqence 2D+\n");
+      Serial.printf(" 12 : Start Seqence 2D-\n");
       Serial.printf("\n");
       Serial.printf(" 21 : Calibration X0\n");
       Serial.printf(" 22 : Calibration X1\n");
@@ -783,7 +979,12 @@ void SerialTX(void) {
       break;
 
     case 11:
-      Serial.printf(" Confirm to Start Sequence? -> ");
+      Serial.printf(" Confirm to Start Sequence 2D+? -> ");
+      tx_pattern = 2;
+      break;
+
+    case 12:
+      Serial.printf(" Confirm to Start Sequence 2D-? -> ");
       tx_pattern = 2;
       break;
 
@@ -897,7 +1098,6 @@ void initLCD(void) {
   M5.Lcd.printf("Seq");
 
 }
-
 
 // LCD Display
 //------------------------------------------------------------------//
@@ -1052,7 +1252,6 @@ void lcdDisplay(void) {
   }
 }
 
-
 // Button Action
 //------------------------------------------------------------------//
 void button_action(void) {
@@ -1090,81 +1289,134 @@ void button_action(void) {
 
 // ServoControl
 //------------------------------------------------------------------//
-void servoControlX0(float ang){
+void servoControlX0(float ang, bool range){
   float i;
   int iRet;
   
   if(interrupt_flag_x0) {
-    i = ang - angle_can_x0;
-    iP_x0 = cons_kp * i;
-    iI_x0 += (float)cons_ki / 1000 * i;
-    iD_x0 = cons_kd * (angle_can_x0 - iBefore_x0) * 1000;
-    iRet = iP_x0 + iI_x0 + iD_x0;
-    iBefore_x0 = angle_can_x0;
-    if( iRet > 20000 ) iRet = 20000;
-    if( iRet < -20000 ) iRet = -20000;
-    servo_x0_output = iRet;  
-    interrupt_flag_x0 = false;
+    if(range) {
+      i = ang - angle_can_x0;
+      iP_x0 = agg_kp * i;
+      iI_x0 += (float)agg_ki / 1000 * i;
+      iD_x0 = agg_kd * (angle_can_x0 - iBefore_x0) * 1000;
+      iRet = iP_x0 + iI_x0 + iD_x0;
+      iBefore_x0 = angle_can_x0;
+      if( iRet > 20000 ) iRet = 20000;
+      if( iRet < -20000 ) iRet = -20000;
+      servo_x0_output = iRet;  
+      interrupt_flag_x0 = false;
+    } else {
+      i = ang - angle_can_x0;
+      iP_x0 = cons_kp * i;
+      iI_x0 += (float)cons_ki / 1000 * i;
+      iD_x0 = cons_kd * (angle_can_x0 - iBefore_x0) * 1000;
+      iRet = iP_x0 + iI_x0 + iD_x0;
+      iBefore_x0 = angle_can_x0;
+      if( iRet > 10000 ) iRet = 10000;
+      if( iRet < -10000 ) iRet = -10000;
+      servo_x0_output = iRet;  
+      interrupt_flag_x0 = false;
+    }
   }
+
 }
 
 // ServoControl
 //------------------------------------------------------------------//
-void servoControlX1(float ang){
+void servoControlX1(float ang, bool range){
   float i;
   int iRet;
   
   if(interrupt_flag_x1) {
-    i = ang - angle_can_x1;
-    iP_x1 = cons_kp * i;
-    iI_x1 += (float)cons_ki / 1000 * i;
-    iD_x1 = cons_kd * (angle_can_x1 - iBefore_x1) * 1000;
-    iRet = iP_x1 + iI_x1 + iD_x1;
-    iBefore_x1 = angle_can_x1;
-    if( iRet > 20000 ) iRet = 20000;
-    if( iRet < -20000 ) iRet = -20000;
-    servo_x1_output = iRet;  
-    interrupt_flag_x1 = false;
+    if(range) {
+      i = ang - angle_can_x1;
+      iP_x1 = agg_kp * i;
+      iI_x1 += (float)agg_ki / 1000 * i;
+      iD_x1 = agg_kd * (angle_can_x1 - iBefore_x1) * 1000;
+      iRet = iP_x1 + iI_x1 + iD_x1;
+      iBefore_x1 = angle_can_x1;
+      if( iRet > 20000 ) iRet = 20000;
+      if( iRet < -20000 ) iRet = -20000;
+      servo_x1_output = iRet;  
+      interrupt_flag_x1 = false;
+    } else {
+      i = ang - angle_can_x1;
+      iP_x1 = cons_kp * i;
+      iI_x1 += (float)cons_ki / 1000 * i;
+      iD_x1 = cons_kd * (angle_can_x1 - iBefore_x1) * 1000;
+      iRet = iP_x1 + iI_x1 + iD_x1;
+      iBefore_x1 = angle_can_x1;
+      if( iRet > 10000 ) iRet = 10000;
+      if( iRet < -10000 ) iRet = -10000;
+      servo_x1_output = iRet;  
+      interrupt_flag_x1 = false;
+    }
   }
 }
 
 // ServoControl
 //------------------------------------------------------------------//
-void servoControlY0(float ang){
+void servoControlY0(float ang, bool range){
   float i;
   int iRet;
   
   if(interrupt_flag_y0) {
-    i = ang - angle_can_y0;
-    iP_y0 = cons_kp * i;
-    iI_y0 += (float)cons_ki / 1000 * i;
-    iD_y0 = cons_kd * (angle_can_y0 - iBefore_y0) * 1000;
-    iRet = iP_y0 + iI_y0 + iD_y0;
-    iBefore_y0 = angle_can_y0;
-    if( iRet > 20000 ) iRet = 20000;
-    if( iRet < -20000 ) iRet = -20000;
-    servo_y0_output = iRet;  
-    interrupt_flag_y0 = false;
+    if(range) {
+      i = ang - angle_can_y0;
+      iP_y0 = agg_kp * i;
+      iI_y0 += (float)agg_ki / 1000 * i;
+      iD_y0 = agg_kd * (angle_can_y0 - iBefore_y0) * 1000;
+      iRet = iP_y0 + iI_y0 + iD_y0;
+      iBefore_y0 = angle_can_y0;
+      if( iRet > 20000 ) iRet = 20000;
+      if( iRet < -20000 ) iRet = -20000;
+      servo_y0_output = iRet;  
+      interrupt_flag_y0 = false;
+    } else {
+      i = ang - angle_can_y0;
+      iP_y0 = cons_kp * i;
+      iI_y0 += (float)cons_ki / 1000 * i;
+      iD_y0 = cons_kd * (angle_can_y0 - iBefore_y0) * 1000;
+      iRet = iP_y0 + iI_y0 + iD_y0;
+      iBefore_y0 = angle_can_y0;
+      if( iRet > 10000 ) iRet = 10000;
+      if( iRet < -10000 ) iRet = -10000;
+      servo_y0_output = iRet;  
+      interrupt_flag_y0 = false;
+    }    
   }
 }
 
 // ServoControl
 //------------------------------------------------------------------//
-void servoControlY1(float ang){
+void servoControlY1(float ang, bool range){
   float i;
   int iRet;
   
   if(interrupt_flag_y1) {
-    i = ang - angle_can_y1;
-    iP_y1 = cons_kp * i;
-    iI_y1 += (float)cons_ki / 1000 * i;
-    iD_y1 = cons_kd * (angle_can_y1 - iBefore_y1) * 1000;
-    iRet = iP_y1 + iI_y1 + iD_y1;
-    iBefore_y1 = angle_can_y1;
-    if( iRet > 20000 ) iRet = 20000;
-    if( iRet < -20000 ) iRet = -20000;
-    servo_y1_output = iRet;  
-    interrupt_flag_y1 = false;
+    if(range) {
+      i = angle_can_y1 - ang;
+      iP_y1 = agg_kp * i;
+      iI_y1 += (float)agg_ki / 1000 * i;
+      iD_y1 = agg_kd * (angle_can_y1 - iBefore_y1) * 1000;
+      iRet = iP_y1 + iI_y1 + iD_y1;
+      iBefore_y1 = angle_can_y1;
+      if( iRet > 20000 ) iRet = 20000;
+      if( iRet < -20000 ) iRet = -20000;
+      servo_y1_output = iRet;  
+      interrupt_flag_y1 = false;
+    } else {
+      i = angle_can_y1 - ang;
+      iP_y1 = cons_kp * i;
+      iI_y1 += (float)cons_ki / 1000 * i;
+      iD_y1 = cons_kd * (angle_can_y1 - iBefore_y1) * 1000;
+      iRet = iP_y1 + iI_y1 + iD_y1;
+      iBefore_y1 = angle_can_y1;
+      if( iRet > 10000 ) iRet = 10000;
+      if( iRet < -10000 ) iRet = -10000;
+      servo_y1_output = iRet;  
+      interrupt_flag_y1 = false;
+    }
   }
 }
 
@@ -1173,10 +1425,10 @@ void servoControlY1(float ang){
 void targetAngleX0(float tang){
 
   if (interrupt_flag2_x0) {
-    if(angle_can_x0 > (tang + 1)) {
+    if(angle_can_x0 > (tang + ANGLE_TOLERANCE)) {
       initial_angle_x0 -= 0.01;
       target_angle_x0 = initial_angle_x0;
-    } else if(angle_can_x0 < (tang - 1)
+    } else if(angle_can_x0 < (tang - ANGLE_TOLERANCE)
     ) {
       initial_angle_x0 += 0.01;
       target_angle_x0 = initial_angle_x0;
@@ -1192,10 +1444,10 @@ void targetAngleX0(float tang){
 void targetAngleX1(float tang){
 
   if (interrupt_flag2_x1) {
-    if(angle_can_x1 > (tang + 1)) {
+    if(angle_can_x1 > (tang + ANGLE_TOLERANCE)) {
       initial_angle_x1 -= 0.01;
       target_angle_x1 = initial_angle_x1;
-    } else if(angle_can_x1 < (tang - 1)
+    } else if(angle_can_x1 < (tang - ANGLE_TOLERANCE)
     ) {
       initial_angle_x1 += 0.01;
       target_angle_x1 = initial_angle_x1;
@@ -1211,10 +1463,10 @@ void targetAngleX1(float tang){
 void targetAngleY0(float tang){
 
   if (interrupt_flag2_y0) {
-    if(angle_can_y0 > (tang + 1)) {
+    if(angle_can_y0 > (tang + ANGLE_TOLERANCE)) {
       initial_angle_y0 -= 0.01;
       target_angle_y0 = initial_angle_y0;
-    } else if(angle_can_y0 < (tang - 1)
+    } else if(angle_can_y0 < (tang - ANGLE_TOLERANCE)
     ) {
       initial_angle_y0 += 0.01;
       target_angle_y0 = initial_angle_y0;
@@ -1230,10 +1482,10 @@ void targetAngleY0(float tang){
 void targetAngleY1(float tang){
 
   if (interrupt_flag2_y1) {
-    if(angle_can_y1 > (tang + 1)) {
+    if(angle_can_y1 > (tang + ANGLE_TOLERANCE)) {
       initial_angle_y1 -= 0.01;
       target_angle_y1 = initial_angle_y1;
-    } else if(angle_can_y1 < (tang - 1)
+    } else if(angle_can_y1 < (tang - ANGLE_TOLERANCE)
     ) {
       initial_angle_y1 += 0.01;
       target_angle_y1 = initial_angle_y1;
@@ -1242,6 +1494,22 @@ void targetAngleY1(float tang){
     }
     interrupt_flag2_y1 = false;
   }
+}
+
+// StepAngle Calculate
+//------------------------------------------------------------------//
+void stepAngleY(float sang) {
+
+  if(millis() - millis_buffer > STABLE_TIME - LOG_TIME) {
+    log_flag = true;
+  }
+  if(millis() - millis_buffer > STABLE_TIME) {
+    log_flag = false;
+    millis_buffer = millis();    
+    if( step_angle_y <= sang && (pattern == 14 || pattern == 25)) step_angle_y++;
+    if( step_angle_y >= sang && (pattern == 15 || pattern == 24)) step_angle_y--;
+  }
+
 }
 
 // Initialize CAN
@@ -1334,7 +1602,7 @@ void test_can(void){
       temp_can_y0 = temp_L; 
     }
     if( rxId == 0x208 ) {  
-      angle_can_y1 = (float)angle_buff * 360/8192-180;
+      angle_can_y1 = (float)angle_buff*-1 * 360/8192+180;
       velocity_can_y1 = ((velocity_H << 8) | velocity_L & 0xFF);     
       torque_can_y1 = float(torque_buff) / 10;
       temp_can_y1 = temp_L; 
