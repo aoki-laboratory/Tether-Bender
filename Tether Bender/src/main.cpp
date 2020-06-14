@@ -37,7 +37,7 @@
 #define INITIALIZEING_SAMPLE 100
 #define CALIBRATION_PERIOD 15
 
-#define STABLE_TIME 5000                        // ms
+#define STABLE_TIME 3000                        // ms
 #define LOG_TIME 1000                           // ms
 
 #define TORQUE_TOLERANCE_X 0.5
