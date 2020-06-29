@@ -949,8 +949,6 @@ void loop() {
 void taskDisplay(void *pvParameters){  
 
   disableCore0WDT(); 
-
-  sd_insert = SD.begin(TFCARD_CS_PIN, SPI, 40000000);
   
   while(1){    
 
@@ -961,6 +959,41 @@ void taskDisplay(void *pvParameters){
     button_action(); 
     AE_HX711_Read();
 
+    int readBank = !writeBank;
+    if (bufferIndex[readBank] >= BufferRecords) {
+      static RecordType temp[BufferRecords];
+
+      memcpy(temp, buffer[readBank], sizeof(temp));
+      bufferIndex[readBank] = 0;
+      file = SD.open(fname, FILE_APPEND);
+
+      for (int i = 0; i < BufferRecords; i++) {
+          file.print(temp[i].log_angle_x0);
+          file.print(",");
+          file.print(temp[i].log_angle_x1);
+          file.print(",");
+          file.print(temp[i].log_angle_x);
+          file.print(",");
+          file.print(temp[i].log_angle_y0);
+          file.print(",");
+          file.print(temp[i].log_angle_y1);
+          file.print(",");
+          file.print(temp[i].log_angle_y);
+          file.print(",");
+          file.print(temp[i].log_torque_x0);
+          file.print(",");
+          file.print(temp[i].log_torque_x1);
+          file.print(",");
+          file.print(temp[i].log_torque_x);
+          file.print(",");
+          file.print(temp[i].log_torque_y0);
+          file.print(",");
+          file.print(temp[i].log_torque_y1);
+          file.print(",");
+          file.println(temp[i].log_torque_y);
+      }
+      file.close();
+    }
   }
 }
 
@@ -1053,27 +1086,19 @@ void TimerInterrupt( void ){
       break;
     case 20:    
       if (log_flag && bufferIndex[writeBank] < BufferRecords) {
-        RecordType* rp = &buffer[writeBank][bufferIndex[writeBank]];
-        rp->log_time = millis();
-        rp->log_seq = seq;
-        rp->log_pattern = pattern;
-        rp->log_power = power;
-        rp->log_delta_count1 = delta_count1;
-        rp->log_total_count1 = total_count1;
-        rp->log_delta_count2 = delta_count2;
-        rp->log_total_count2 = total_count2;
-        rp->log_delta_count3 = delta_count3;
-        rp->log_total_count3 = total_count3;
-        rp->log_distance1 = distance1;
-        rp->log_distance2 = distance2;
-        rp->log_rssi_value = rssi_value;
-        rp->log_IMU_ax = accX;
-        rp->log_IMU_ay = accY;
-        rp->log_IMU_az = accZ;
-        rp->log_IMU_gx = gyroX;
-        rp->log_IMU_gy = gyroY;
-        rp->log_IMU_gz = gyroZ;
-        rp->log_IMU_temp = temp;
+        RecordType* rp = &buffer[writeBank][bufferIndex[writeBank]];        
+        rp->log_angle_x0 = angle_can_x0;
+        rp->log_angle_x1 = angle_can_x1;
+        rp->log_angle_x = angle_x;
+        rp->log_angle_y0 = angle_can_y0;
+        rp->log_angle_y1 = angle_can_y1;
+        rp->log_angle_y = angle_y;
+        rp->log_torque_x0 = torque_x0;
+        rp->log_torque_x1 = torque_x1;
+        rp->log_torque_x = torque_x0 + torque_x1;
+        rp->log_torque_y0 = torque_y0;
+        rp->log_torque_y1 = torque_y1;
+        rp->log_torque_y = torque_y0 + torque_y1;
         if (++bufferIndex[writeBank] >= BufferRecords) {
             writeBank = !writeBank;
         }
