@@ -426,23 +426,23 @@ void loop() {
         file.print(",");
         file.print(temp[i].log_angle_x);
         file.print(",");
+        file.print(temp[i].log_torque_x);
+        file.print(",");
         file.print(temp[i].log_torque_x0);
         file.print(",");
-        file.print(temp[i].log_torque_x1);
-        file.print(",");
-        file.print(temp[i].log_torque_x);
+        file.print(temp[i].log_torque_x1);        
         file.print(",");
         file.print(temp[i].log_angle_y0);
         file.print(",");
         file.print(temp[i].log_angle_y1);
         file.print(",");
         file.print(temp[i].log_angle_y);
+        file.print(",");
+        file.print(temp[i].log_torque_y);
         file.print(",");          
         file.print(temp[i].log_torque_y0);
         file.print(",");
-        file.print(temp[i].log_torque_y1);
-        file.print(",");
-        file.println(temp[i].log_torque_y);
+        file.println(temp[i].log_torque_y1);        
     }
     file.close();
   }
@@ -1094,15 +1094,15 @@ void TimerInterrupt( void ){
         rp->log_angle_x0 = angle_can_x0;
         rp->log_angle_x1 = angle_can_x1;
         rp->log_angle_x = angle_x;
+        rp->log_torque_x = torque_x0 + torque_x1;
         rp->log_torque_x0 = torque_x0;
         rp->log_torque_x1 = torque_x1;
-        rp->log_torque_x = torque_x0 + torque_x1;
         rp->log_angle_y0 = angle_can_y0;
         rp->log_angle_y1 = angle_can_y1;
         rp->log_angle_y = angle_y;        
+        rp->log_torque_y = torque_y0 + torque_y1;
         rp->log_torque_y0 = torque_y0;
         rp->log_torque_y1 = torque_y1;
-        rp->log_torque_y = torque_y0 + torque_y1;
         if (++bufferIndex[writeBank] >= BufferRecords) {
             writeBank = !writeBank;
         }
@@ -1171,24 +1171,24 @@ void SerialRX(void) {
         file.print("Angle-X1");
         file.print(",");
         file.print("Angle-X");
+        file.print(",");
+        file.print("Moment-X");
         file.print(",");      
         file.print("Moment-X0");
         file.print(",");        
-        file.print("Moment-X1");
-        file.print(",");
-        file.print("Moment-X");
+        file.print("Moment-X1");        
         file.print(",");  
         file.print("Angle-Y0");
         file.print(",");
         file.print("Angle-Y1");
         file.print(",");
         file.print("Angle-Y");
+        file.print(",");
+        file.println("Moment-Y");
         file.print(",");        
         file.print("Moment-Y0");
         file.print(",");        
-        file.print("Moment-Y1");
-        file.print(",");
-        file.println("Moment-Y");
+        file.print("Moment-Y1");        
         file.close();
         tx_pattern = 11;
         rx_pattern = 101;
