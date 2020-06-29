@@ -1145,6 +1145,7 @@ void SerialRX(void) {
                 +(String)xbee_rx_buffer
                 +"-00";
                 +".csv";
+        Serial.println(fname_buff);
         fname = fname_buff.c_str();
         rx_pattern = 51;
       }
