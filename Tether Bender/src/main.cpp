@@ -411,6 +411,42 @@ void loop() {
   SerialRX();
   SerialTX();
 
+  
+  int readBank = !writeBank;
+  if (bufferIndex[readBank] >= BufferRecords) {
+    static RecordType temp[BufferRecords];
+
+    memcpy(temp, buffer[readBank], sizeof(temp));
+    bufferIndex[readBank] = 0;
+    file = SD.open(fname, FILE_APPEND);
+    for (int i = 0; i < BufferRecords; i++) {
+        file.print(temp[i].log_angle_x0);
+        file.print(",");
+        file.print(temp[i].log_angle_x1);
+        file.print(",");
+        file.print(temp[i].log_angle_x);
+        file.print(",");
+        file.print(temp[i].log_torque_x0);
+        file.print(",");
+        file.print(temp[i].log_torque_x1);
+        file.print(",");
+        file.print(temp[i].log_torque_x);
+        file.print(",");
+        file.print(temp[i].log_angle_y0);
+        file.print(",");
+        file.print(temp[i].log_angle_y1);
+        file.print(",");
+        file.print(temp[i].log_angle_y);
+        file.print(",");          
+        file.print(temp[i].log_torque_y0);
+        file.print(",");
+        file.print(temp[i].log_torque_y1);
+        file.print(",");
+        file.println(temp[i].log_torque_y);
+    }
+    file.close();
+  }
+
   switch (pattern) {
   case 0: 
     power_x0 = 0;   
@@ -953,8 +989,6 @@ void loop() {
 void taskDisplay(void *pvParameters){  
 
   disableCore0WDT(); 
-
-  sd_insert = SD.begin(TFCARD_CS_PIN, SPI, 40000000);
   
   while(1){    
 
@@ -964,41 +998,6 @@ void taskDisplay(void *pvParameters){
 
     button_action(); 
     AE_HX711_Read();
-
-    int readBank = !writeBank;
-    if (bufferIndex[readBank] >= BufferRecords) {
-      static RecordType temp[BufferRecords];
-
-      memcpy(temp, buffer[readBank], sizeof(temp));
-      bufferIndex[readBank] = 0;
-      file = SD.open(fname, FILE_APPEND);
-      for (int i = 0; i < BufferRecords; i++) {
-          file.print(temp[i].log_angle_x0);
-          file.print(",");
-          file.print(temp[i].log_angle_x1);
-          file.print(",");
-          file.print(temp[i].log_angle_x);
-          file.print(",");
-          file.print(temp[i].log_torque_x0);
-          file.print(",");
-          file.print(temp[i].log_torque_x1);
-          file.print(",");
-          file.print(temp[i].log_torque_x);
-          file.print(",");
-          file.print(temp[i].log_angle_y0);
-          file.print(",");
-          file.print(temp[i].log_angle_y1);
-          file.print(",");
-          file.print(temp[i].log_angle_y);
-          file.print(",");          
-          file.print(temp[i].log_torque_y0);
-          file.print(",");
-          file.print(temp[i].log_torque_y1);
-          file.print(",");
-          file.println(temp[i].log_torque_y);
-      }
-      file.close();
-    }
   }
 }
 
