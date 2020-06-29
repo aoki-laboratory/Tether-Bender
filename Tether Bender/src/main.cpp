@@ -1141,14 +1141,13 @@ void SerialRX(void) {
       } else if( tx_pattern == 2 ) {
         rx_val = atof(xbee_rx_buffer);
       } else if( tx_pattern == 3 ) {
-        //fname_buff  = "/log/"+(String)xbee_rx_buffer
-        //        +(String)(timeinfo.tm_year + 1900)
-        //        +"_"+(String)(timeinfo.tm_mon + 1)
-        //        +"_"+(String)timeinfo.tm_mday
-        //        +"_"+(String)timeinfo.tm_hour
-        //        +"_"+(String)timeinfo.tm_min
-        //        +".csv";
-        fname_buff  = "/log/faefe.csv";
+        fname_buff  = "/log/"+(String)xbee_rx_buffer
+                +(String)(timeinfo.tm_year + 1900)
+                +"_"+(String)(timeinfo.tm_mon + 1)
+                +"_"+(String)timeinfo.tm_mday
+                +"_"+(String)timeinfo.tm_hour
+                +"_"+(String)timeinfo.tm_min
+                +".csv";
         fname = fname_buff.c_str();
         rx_pattern = 51;
       }
