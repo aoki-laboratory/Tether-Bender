@@ -37,17 +37,20 @@
 #define INITIALIZEING_SAMPLE 100
 #define CALIBRATION_PERIOD 15
 
-#define STABLE_TIME 3000                        // ms
-#define LOG_TIME 1000                           // ms
+#define STABLE_TIME 1500                        // ms
+#define LOG_TIME 500                            // ms
 
 #define TORQUE_TOLERANCE_X 0.5
 #define I_TORQUE_TOLERANCE_X 50
-#define TORQUE_TOLERANCE_Y 10
-#define I_TORQUE_TOLERANCE_Y 1000
+#define TORQUE_TOLERANCE_Y 3
+#define I_TORQUE_TOLERANCE_Y 100
 #define ANGLE_TOLERANCE 1.0
 
 #define YAXIS_MAX_ANGLE 45
-#define YAXIS_MIN_ANGLE -42
+#define YAXIS_MIN_ANGLE -43
+
+#define ANGLE_AVERATING 3
+#define ANGLE_IGNORE_THRESHOLD 10
 
 //Global
 //------------------------------------------------------------------//
@@ -57,6 +60,11 @@ CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_x0;
 CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_x1;
 CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_y0;
 CircularBuffer<int, AVERATING_BUFFER_SIZE> buffer_y1;
+
+CircularBuffer<float, ANGLE_AVERATING> angle_averating_buffer_x0;
+CircularBuffer<float, ANGLE_AVERATING> angle_averating_buffer_x1;
+CircularBuffer<float, ANGLE_AVERATING> angle_averating_buffer_y0;
+CircularBuffer<float, ANGLE_AVERATING> angle_averating_buffer_y1;
 
 const unsigned int LCD_STATUS = M5.Lcd.color565(0,0,0);
 const unsigned int LCD_MAIN = M5.Lcd.color565(8,8,8);
@@ -97,11 +105,16 @@ float initial_angle_x1;
 float initial_angle_y0;
 float initial_angle_y1;
 
+float angle_averating_x0;
+float angle_averating_x1;
+float angle_averating_y0;
+float angle_averating_y1;
+
 float angle_x;
 float angle_y;
 
-int step_angle_x = 0;
-int step_angle_y = 0;
+float step_angle_x = 0;
+float step_angle_y = 0;
 
 bool interrupt_flag_x0 = false;
 bool interrupt_flag2_x0 = false;
@@ -135,12 +148,17 @@ float iBefore_y0;
 int iP_y1, iD_y1;
 float iI_y1;
 float iBefore_y1;
-int agg_kp = 1500;
-int agg_ki = 0;
-int agg_kd = 1;
+int agg_kp = 1000;
+int agg_ki = 10;
+int agg_kd = 0;
 int cons_kp = 500;
-int cons_ki = 0;
-int cons_kd = 1;
+int cons_ki = 1;
+int cons_kd = 0;
+
+float angle_offset_x0 = 0;
+float angle_offset_x1 = 0;
+float angle_offset_y0 = -1;
+float angle_offset_y1 = 0.8;
 
 
 
@@ -168,7 +186,7 @@ String timeStr;
 bool hx711_flag = false;
 char hx711_pattern = 0;
 float load_step_x[] = {0, 2025, 4050, 6075, 8100, 10125, 12150, 14175, 16200, 18225, 20250};
-float load_step_y[] = {0, 2025, 4050, 6075, 8100, 10125, 12150, 14175, 16200, 18225, 20250};
+float load_step_y[] = {0, 45000, 90000, 135000, 180000, 225000};
 // HX711 X0
 long    native_data_x0;
 long    native_data_x0_buffer;
@@ -445,6 +463,7 @@ void loop() {
     power_y0 = servo_y0_output;
     power_y1 = servo_y1_output;
     if(step_angle_y < 0) {
+      tx_pattern = 1;
       pattern = 0;
     }
     break;
@@ -500,8 +519,8 @@ void loop() {
     power_x0 = servo_x0_output;
     power_x1 = servo_x1_output;
     stepAngleY(YAXIS_MIN_ANGLE);
-    servoControlY0(step_angle_y, 1);  
-    servoControlY1(step_angle_y, 1);  
+    servoControlY0(step_angle_y, 0);  
+    servoControlY1(step_angle_y, 0);  
     power_y0 = servo_y0_output;
     power_y1 = servo_y1_output;
     if(step_angle_y <= YAXIS_MIN_ANGLE) {
@@ -515,11 +534,12 @@ void loop() {
     power_x0 = servo_x0_output;
     power_x1 = servo_x1_output;
     stepAngleY(0);
-    servoControlY0(step_angle_y, 1);  
-    servoControlY1(step_angle_y, 1);  
+    servoControlY0(step_angle_y, 0);  
+    servoControlY1(step_angle_y, 0);  
     power_y0 = servo_y0_output;
     power_y1 = servo_y1_output;
     if(step_angle_y > 0) {
+      tx_pattern = 1;
       pattern = 0;
     }
     break;
@@ -575,8 +595,8 @@ void loop() {
     servoControlX1(0, 1);   
     power_x0 = servo_x0_output;
     power_x1 = servo_x1_output;
-    targetAngleY0(YAXIS_MAX_ANGLE, 0.001); 
-    targetAngleY1(YAXIS_MAX_ANGLE, 0.001); 
+    targetAngleY0(YAXIS_MAX_ANGLE, 0.0005); 
+    targetAngleY1(YAXIS_MAX_ANGLE, 0.0005); 
     servoControlY0(target_angle_y0, 1);  
     servoControlY1(target_angle_y1, 1);  
     power_y0 = servo_y0_output;
@@ -606,8 +626,8 @@ void loop() {
     servoControlX1(0, 1);   
     power_x0 = servo_x0_output;
     power_x1 = servo_x1_output;
-    targetAngleY0(0, 0.001); 
-    targetAngleY1(0, 0.001); 
+    targetAngleY0(0, 0.0005); 
+    targetAngleY1(0, 0.0005); 
     servoControlY0(target_angle_y0, 1);  
     servoControlY1(target_angle_y1, 1);  
     power_y0 = servo_y0_output;
@@ -628,6 +648,7 @@ void loop() {
     power_y0 = servo_y0_output;
     power_y1 = servo_y1_output;
     if(millis() - millis_buffer > STABLE_TIME) {
+      tx_pattern = 1;
       pattern = 0;
     }
     break;
@@ -683,8 +704,8 @@ void loop() {
     servoControlX1(0, 1);   
     power_x0 = servo_x0_output;
     power_x1 = servo_x1_output;
-    targetAngleY0(YAXIS_MIN_ANGLE, 0.001); 
-    targetAngleY1(YAXIS_MIN_ANGLE, 0.001); 
+    targetAngleY0(YAXIS_MIN_ANGLE, 0.0005); 
+    targetAngleY1(YAXIS_MIN_ANGLE, 0.0005); 
     servoControlY0(target_angle_y0, 1);  
     servoControlY1(target_angle_y1, 1);  
     power_y0 = servo_y0_output;
@@ -714,8 +735,8 @@ void loop() {
     servoControlX1(0, 1);   
     power_x0 = servo_x0_output;
     power_x1 = servo_x1_output;
-    targetAngleY0(0, 0.001); 
-    targetAngleY1(0, 0.001); 
+    targetAngleY0(0, 0.0005); 
+    targetAngleY1(0, 0.0005); 
     servoControlY0(target_angle_y0, 1);  
     servoControlY1(target_angle_y1, 1);  
     power_y0 = servo_y0_output;
@@ -736,6 +757,7 @@ void loop() {
     power_y0 = servo_y0_output;
     power_y1 = servo_y1_output;
     if(millis() - millis_buffer > STABLE_TIME) {
+      tx_pattern = 1;
       pattern = 0;
     }
     break;
@@ -966,7 +988,7 @@ void TimerInterrupt( void ){
           if(log_flag) {
             Serial.printf("%5.2f, ", float(millis()) / 1000); 
             Serial.printf("%5d, ", pattern); 
-            Serial.printf("%3d, ", step_angle_y*2); 
+            Serial.printf("%5.2f, ", step_angle_y*2); 
             Serial.printf("%5.2f, ", angle_y); 
             Serial.printf("%5.2f, ", torque_y0); 
             Serial.printf("%5.2f\n", torque_y1); 
@@ -996,7 +1018,7 @@ void TimerInterrupt( void ){
           Serial.printf("%5.2f, ", torque_x1); 
           Serial.printf("%5.2f, ", torque_y0); 
           Serial.printf("%5.2f\n", torque_y1); 
-        }
+        } 
       }
       break;
     case 20:          
@@ -1161,7 +1183,7 @@ void SerialRX(void) {
         break;
 
       case 24:             
-        pattern = 301;
+        pattern = 331;
         rx_pattern = 0;
         break;
 
@@ -1663,8 +1685,8 @@ void servoControlY0(float ang, bool range){
       iD_y0 = agg_kd * (angle_can_y0 - iBefore_y0) * 1000;
       iRet = iP_y0 + iI_y0 + iD_y0;
       iBefore_y0 = angle_can_y0;
-      if( iRet > 20000 ) iRet = 20000;
-      if( iRet < -20000 ) iRet = -20000;
+      if( iRet > 10000 ) iRet = 10000;
+      if( iRet < -10000 ) iRet = -10000;
       servo_y0_output = iRet;  
       interrupt_flag_y0 = false;
     } else {
@@ -1696,8 +1718,8 @@ void servoControlY1(float ang, bool range){
       iD_y1 = agg_kd * (angle_can_y1 - iBefore_y1) * 1000;
       iRet = iP_y1 + iI_y1 + iD_y1;
       iBefore_y1 = angle_can_y1;
-      if( iRet > 20000 ) iRet = 20000;
-      if( iRet < -20000 ) iRet = -20000;
+      if( iRet > 10000 ) iRet = 10000;
+      if( iRet < -10000 ) iRet = -10000;
       servo_y1_output = iRet;  
       interrupt_flag_y1 = false;
     } else {
@@ -1801,8 +1823,8 @@ void stepAngleY(float sang) {
   if(millis() - millis_buffer > STABLE_TIME) {
     log_flag = false;
     millis_buffer = millis();    
-    if( step_angle_y <= sang && (pattern == 14 || pattern == 25)) step_angle_y++;
-    if( step_angle_y >= sang && (pattern == 15 || pattern == 24)) step_angle_y--;
+    if( step_angle_y <= sang && (pattern == 14 || pattern == 25)) step_angle_y+=0.5;
+    if( step_angle_y >= sang && (pattern == 15 || pattern == 24)) step_angle_y-=0.5;
   }
 
 }
@@ -1834,6 +1856,8 @@ void test_can(void){
 
   int angle_buff;
   int torque_buff;
+
+  float sum = 0;  
 
   data[0] = power_x1 >> 8 & 0xFF;
   data[1] = power_x1 & 0xFF;
@@ -1880,24 +1904,60 @@ void test_can(void){
     torque_buff = ((torque_H << 8) | torque_L & 0xFF)*741/1000;
     if( rxId == 0x206 ) {  
       angle_can_x0 = (float)angle_buff * 360/8192-180;
+      if(angle_can_x0 > (angle_averating_x0+ANGLE_IGNORE_THRESHOLD) && angle_can_x0 < (angle_averating_x0-ANGLE_IGNORE_THRESHOLD)) {
+        angle_averating_buffer_x0.push(angle_can_x0);
+      } else {
+        angle_averating_buffer_x0.push(angle_averating_x0);
+      }
+      for(int i=0; i<ANGLE_AVERATING; i++) {
+        sum += angle_can_x0;
+      }
+      angle_averating_x0 = sum / ANGLE_AVERATING;     
       velocity_can_x0 = ((velocity_H << 8) | velocity_L & 0xFF);     
       torque_can_x0 = float(torque_buff) / 10;
       temp_can_x0 = temp_L; 
     }
     if( rxId == 0x205 ) {  
       angle_can_x1 = (float)angle_buff * 360/8192-180;
+      if(angle_can_x1 > (angle_averating_x1+ANGLE_IGNORE_THRESHOLD) && angle_can_x1 < (angle_averating_x1-ANGLE_IGNORE_THRESHOLD)) {
+        angle_averating_buffer_x1.push(angle_can_x1);
+      } else {
+        angle_averating_buffer_x1.push(angle_averating_x1);
+      }
+      for(int i=0; i<ANGLE_AVERATING; i++) {
+        sum += angle_can_x1;
+      }
+      angle_averating_x1 = sum / ANGLE_AVERATING;    
       velocity_can_x1 = ((velocity_H << 8) | velocity_L & 0xFF);     
       torque_can_x1 = float(torque_buff) / 10;
       temp_can_x1 = temp_L; 
     }
     if( rxId == 0x207 ) {  
-      angle_can_y0 = (float)angle_buff * 360/8192-180;
+      angle_can_y0 = (float)angle_buff * 360/8192-180-1;
+      if(angle_can_y0 > (angle_averating_y0+ANGLE_IGNORE_THRESHOLD) && angle_can_y0 < (angle_averating_y0-ANGLE_IGNORE_THRESHOLD)) {
+        angle_averating_buffer_y0.push(angle_can_y0);
+      } else {
+        angle_averating_buffer_y0.push(angle_averating_y0);
+      }
+      for(int i=0; i<ANGLE_AVERATING; i++) {
+        sum += angle_can_y0;
+      }
+      angle_averating_y0 = sum / ANGLE_AVERATING;    
       velocity_can_y0 = ((velocity_H << 8) | velocity_L & 0xFF);     
       torque_can_y0 = float(torque_buff) / 10;
       temp_can_y0 = temp_L; 
     }
     if( rxId == 0x208 ) {  
-      angle_can_y1 = (float)angle_buff*-1 * 360/8192+180;
+      angle_can_y1 = (float)angle_buff*-1 * 360/8192+180.8;
+      if(angle_can_y1 > (angle_averating_y1+ANGLE_IGNORE_THRESHOLD) && angle_can_y1 < (angle_averating_y1-ANGLE_IGNORE_THRESHOLD)) {
+        angle_averating_buffer_y1.push(angle_can_y1);
+      } else {
+        angle_averating_buffer_y1.push(angle_averating_y1);
+      }
+      for(int i=0; i<ANGLE_AVERATING; i++) {
+        sum += angle_can_y1;
+      }
+      angle_averating_y1 = sum / ANGLE_AVERATING;    
       velocity_can_y1 = ((velocity_H << 8) | velocity_L & 0xFF);     
       torque_can_y1 = float(torque_buff) / 10;
       temp_can_y1 = temp_L; 
@@ -2410,18 +2470,13 @@ void getCalibrationDataX1(void) {
 //------------------------------------------------------------------//
 void getCalibrationDataY0(void) {
 
-  for(int j=0; j<11; j++) {
+  for(int j=0; j<6; j++) {
     if(j==0) Serial.printf(" Prepare for the Y0 axis calibration and press the ButtonA.\n"); 
-    if(j==1) Serial.printf(" Load 1 coin and press button A.\n"); 
-    if(j==2) Serial.printf(" Load 2 coins and press button A.\n"); 
-    if(j==3) Serial.printf(" Load 3 coins and press button A.\n"); 
-    if(j==4) Serial.printf(" Load 4 coins and press button A.\n"); 
-    if(j==5) Serial.printf(" Load 5 coins and press button A.\n"); 
-    if(j==6) Serial.printf(" Load 6 coins and press button A.\n"); 
-    if(j==7) Serial.printf(" Load 7 coins and press button A.\n"); 
-    if(j==8) Serial.printf(" Load 8 coins and press button A.\n"); 
-    if(j==9) Serial.printf(" Load 9 coins and press button A.\n"); 
-    if(j==10) Serial.printf(" Load 10 coins and press button A.\n"); 
+    if(j==1) Serial.printf(" Load 1 weight and press button A.\n"); 
+    if(j==2) Serial.printf(" Load 2 weight and press button A.\n"); 
+    if(j==3) Serial.printf(" Load 3 weight and press button A.\n"); 
+    if(j==4) Serial.printf(" Load 4 weight and press button A.\n"); 
+    if(j==5) Serial.printf(" Load 5 weight and press button A.\n"); 
     while(!M5.BtnA.isPressed());
     averating_data_y0_buffer = 0;
     for(int i=0; i<INITIALIZEING_SAMPLE; i++) {
@@ -2456,21 +2511,21 @@ void getCalibrationDataY0(void) {
     calibration_factor_y0[j] = averating_data_y0_buffer / INITIALIZEING_SAMPLE;  
   }
 
-  for (int i=0; i<11; i++) {
+  for (int i=0; i<6; i++) {
     Serial.printf(" %d, %f\n", calibration_factor_y0[i], load_step_y[i]); 
   }
 
   float sum_xy = 0, sum_x = 0, sum_y = 0, sum_x2 = 0;
 
-  for (int i=0; i<11; i++) {
+  for (int i=0; i<6; i++) {
     sum_xy += calibration_factor_y0[i] * load_step_y[i];
     sum_x += calibration_factor_y0[i];
     sum_y += load_step_y[i];
     sum_x2 += pow(calibration_factor_y0[i], 2);
   }
   
-  coefficient_y0 = (11 * sum_xy - sum_x * sum_y) / (11 * sum_x2 - pow(sum_x, 2));
-  intercept_y0 = (sum_x2 * sum_y - sum_xy * sum_x) / (11 * sum_x2 - pow(sum_x, 2));
+  coefficient_y0 = (6 * sum_xy - sum_x * sum_y) / (6 * sum_x2 - pow(sum_x, 2));
+  intercept_y0 = (sum_x2 * sum_y - sum_xy * sum_x) / (6 * sum_x2 - pow(sum_x, 2));
 
   coefficient_y0_eeprom = coefficient_y0 * 1000000;
   intercept_y0_eeprom = intercept_y0 * 1000;
@@ -2487,18 +2542,13 @@ void getCalibrationDataY0(void) {
 //------------------------------------------------------------------//
 void getCalibrationDataY1(void) {
 
-  for(int j=0; j<11; j++) {
+  for(int j=0; j<6; j++) {
     if(j==0) Serial.printf(" Prepare for the Y1 axis calibration and press the ButtonA.\n"); 
-    if(j==1) Serial.printf(" Load 1 coin and press button A.\n"); 
-    if(j==2) Serial.printf(" Load 2 coins and press button A.\n"); 
-    if(j==3) Serial.printf(" Load 3 coins and press button A.\n"); 
-    if(j==4) Serial.printf(" Load 4 coins and press button A.\n"); 
-    if(j==5) Serial.printf(" Load 5 coins and press button A.\n"); 
-    if(j==6) Serial.printf(" Load 6 coins and press button A.\n"); 
-    if(j==7) Serial.printf(" Load 7 coins and press button A.\n"); 
-    if(j==8) Serial.printf(" Load 8 coins and press button A.\n"); 
-    if(j==9) Serial.printf(" Load 9 coins and press button A.\n"); 
-    if(j==10) Serial.printf(" Load 10 coins and press button A.\n"); 
+    if(j==1) Serial.printf(" Load 1 weight and press button A.\n"); 
+    if(j==2) Serial.printf(" Load 2 weight and press button A.\n"); 
+    if(j==3) Serial.printf(" Load 3 weight and press button A.\n"); 
+    if(j==4) Serial.printf(" Load 4 weight and press button A.\n"); 
+    if(j==5) Serial.printf(" Load 5 weight and press button A.\n"); 
     while(!M5.BtnA.isPressed());
     averating_data_y1_buffer = 0;
     for(int i=0; i<INITIALIZEING_SAMPLE; i++) {
@@ -2533,21 +2583,21 @@ void getCalibrationDataY1(void) {
     calibration_factor_y1[j] = averating_data_y1_buffer / INITIALIZEING_SAMPLE;  
   }
 
-  for (int i=0; i<11; i++) {
+  for (int i=0; i<6; i++) {
     Serial.printf(" %d, %f\n", calibration_factor_y1[i], load_step_y[i]); 
   }
 
   float sum_xy = 0, sum_x = 0, sum_y = 0, sum_x2 = 0;
 
-  for (int i=0; i<11; i++) {
+  for (int i=0; i<6; i++) {
     sum_xy += calibration_factor_y1[i] * load_step_y[i];
     sum_x += calibration_factor_y1[i];
     sum_y += load_step_y[i];
     sum_x2 += pow(calibration_factor_y1[i], 2);
   }
   
-  coefficient_y1 = (11 * sum_xy - sum_x * sum_y) / (11 * sum_x2 - pow(sum_x, 2));
-  intercept_y1 = (sum_x2 * sum_y - sum_xy * sum_x) / (11 * sum_x2 - pow(sum_x, 2));
+  coefficient_y1 = (6 * sum_xy - sum_x * sum_y) / (6 * sum_x2 - pow(sum_x, 2));
+  intercept_y1 = (sum_x2 * sum_y - sum_xy * sum_x) / (6 * sum_x2 - pow(sum_x, 2));
 
   coefficient_y1_eeprom = coefficient_y1 * 1000000;
   intercept_y1_eeprom = intercept_y1 * 1000;
