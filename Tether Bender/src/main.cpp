@@ -52,7 +52,7 @@
 #define ANGLE_AVERATING 3
 #define ANGLE_IGNORE_THRESHOLD 10
 
-#define BufferRecords 512                    // 1Cycle Buffer Records 
+#define BufferRecords 64                    // 1Cycle Buffer Records 
 
 //Global
 //------------------------------------------------------------------//
@@ -452,6 +452,7 @@ void loop() {
 
   case 13:
     tel_flag = true;
+    log_flag = true;
     servoControlX0(0, 1); 
     servoControlX1(0, 1);   
     power_x0 = servo_x0_output;
@@ -492,6 +493,7 @@ void loop() {
     power_y1 = servo_y1_output;
     if(step_angle_y < 0) {
       //tx_pattern = 1;
+      log_flag = false;
       pattern = 21;
     }
     break;
@@ -528,6 +530,7 @@ void loop() {
 
   case 23:
     tel_flag = true;
+    log_flag = true;
     servoControlX0(0, 1); 
     servoControlX1(0, 1);   
     power_x0 = servo_x0_output;
@@ -568,6 +571,7 @@ void loop() {
     power_y1 = servo_y1_output;
     if(step_angle_y > 0) {
       tx_pattern = 1;
+      log_flag = false;
       pattern = 0;
     }
     break;
@@ -1137,7 +1141,7 @@ void SerialRX(void) {
       } else if( tx_pattern == 2 ) {
         rx_val = atof(xbee_rx_buffer);
       } else if( tx_pattern == 3 ) {
-        fname_buff  = (String)xbee_rx_buffer
+        fname_buff  = "/log/"+(String)xbee_rx_buffer
                 +(String)(timeinfo.tm_year + 1900)
                 +"_"+(String)(timeinfo.tm_mon + 1)
                 +"_"+(String)timeinfo.tm_mday
