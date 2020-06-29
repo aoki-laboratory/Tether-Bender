@@ -953,6 +953,8 @@ void loop() {
 void taskDisplay(void *pvParameters){  
 
   disableCore0WDT(); 
+
+  sd_insert = SD.begin(TFCARD_CS_PIN, SPI, 40000000);
   
   while(1){    
 
@@ -970,7 +972,6 @@ void taskDisplay(void *pvParameters){
       memcpy(temp, buffer[readBank], sizeof(temp));
       bufferIndex[readBank] = 0;
       file = SD.open(fname, FILE_APPEND);
-
       for (int i = 0; i < BufferRecords; i++) {
           file.print(temp[i].log_angle_x0);
           file.print(",");
