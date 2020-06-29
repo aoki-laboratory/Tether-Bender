@@ -1150,6 +1150,7 @@ void SerialRX(void) {
                 +"_"+(String)timeinfo.tm_min
                 +".csv";
         fname = fname_buff.c_str();
+        rx_pattern = 51;
       }
       xbee_index = 0;
       
@@ -1160,22 +1161,38 @@ void SerialRX(void) {
         
       case 11:      
         tx_pattern = 51;
-        rx_pattern = 51;
         break;
 
       case 51:      
         file = SD.open(fname, FILE_APPEND); 
-        file.print("Angle");
+        file.print("Angle-X0");
+        file.print(",");
+        file.print("Angle-X1");
+        file.print(",");
+        file.print("Angle-X");
+        file.print(",");        
+        file.print("Angle-Y0");
+        file.print(",");
+        file.print("Angle-Y1");
+        file.print(",");
+        file.print("Angle-Y");
+        file.print(",");
+        file.print("Moment-X0");
+        file.print(",");        
+        file.print("Moment-X1");
+        file.print(",");
+        file.print("Moment-X");
         file.print(",");
         file.print("Moment-Y0");
-        file.print(",");
+        file.print(",");        
         file.print("Moment-Y1");
         file.print(",");
-        file.println("Moment-Total");
+        file.println("Moment-Y");
         file.close();
         tx_pattern = 11;
         rx_pattern = 101;
         break;
+
 
       case 101:
         if( rx_val == 1 ) {   
