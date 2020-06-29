@@ -52,6 +52,8 @@
 #define ANGLE_AVERATING 3
 #define ANGLE_IGNORE_THRESHOLD 10
 
+#define BufferRecords 512                    // 1Cycle Buffer Records 
+
 //Global
 //------------------------------------------------------------------//
 TaskHandle_t task_handl;
@@ -93,7 +95,7 @@ volatile bool  lcd_flag = false;
 volatile unsigned int millis_buffer = 0;
 bool init_flag = false;
 char progress_value = 0;
-volatile bool log_flag = false;
+volatile bool tel_flag = false;
 
 float target_angle_x0;
 float target_angle_x1;
@@ -270,12 +272,38 @@ int      rx_val = 0;
 char     xbee_rx_buffer[16];
 int      xbee_index = 0;
 
+//SD
+File file;
+String fname_buff;
+const char* fname;
+volatile bool log_flag = false;
+
 // Timer
 hw_timer_t * timer = NULL;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 volatile int interruptCounter;
 int iTimer15;
 int iTimer50;
+
+// Log
+typedef struct {
+    float log_angle_x0;
+    float log_angle_x1;
+    float log_angle_x;
+    float log_angle_y0;
+    float log_angle_y1;
+    float log_angle_y;
+    float log_torque_x0;
+    float log_torque_x1;
+    float log_torque_x;
+    float log_torque_y0;
+    float log_torque_y1;
+    float log_torque_y;
+} RecordType;
+
+static RecordType buffer[2][BufferRecords];
+static volatile int writeBank = 0;
+static volatile int bufferIndex[2] = {0, 0};
 
 //Prototype
 //------------------------------------------------------------------//
@@ -423,7 +451,7 @@ void loop() {
     break;
 
   case 13:
-    log_flag = true;
+    tel_flag = true;
     servoControlX0(0, 1); 
     servoControlX1(0, 1);   
     power_x0 = servo_x0_output;
@@ -463,8 +491,8 @@ void loop() {
     power_y0 = servo_y0_output;
     power_y1 = servo_y1_output;
     if(step_angle_y < 0) {
-      tx_pattern = 1;
-      pattern = 0;
+      //tx_pattern = 1;
+      pattern = 21;
     }
     break;
 
@@ -499,7 +527,7 @@ void loop() {
     break;
 
   case 23:
-    log_flag = true;
+    tel_flag = true;
     servoControlX0(0, 1); 
     servoControlX1(0, 1);   
     power_x0 = servo_x0_output;
@@ -574,7 +602,7 @@ void loop() {
     break;
 
   case 53:
-    log_flag = true;
+    tel_flag = true;
     servoControlX0(0, 1); 
     servoControlX1(0, 1);   
     power_x0 = servo_x0_output;
@@ -683,7 +711,7 @@ void loop() {
     break;
 
   case 63:
-    log_flag = true;
+    tel_flag = true;
     servoControlX0(0, 1); 
     servoControlX1(0, 1);   
     power_x0 = servo_x0_output;
@@ -921,6 +949,8 @@ void loop() {
 void taskDisplay(void *pvParameters){  
 
   disableCore0WDT(); 
+
+  sd_insert = SD.begin(TFCARD_CS_PIN, SPI, 40000000);
   
   while(1){    
 
@@ -985,7 +1015,7 @@ void TimerInterrupt( void ){
     case 10:
       if( tx_pattern == 101 ) {
         if(pattern < 30 && pattern != 0) {
-          if(log_flag) {
+          if(tel_flag) {
             Serial.printf("%5.2f, ", float(millis()) / 1000); 
             Serial.printf("%5d, ", pattern); 
             Serial.printf("%5.2f, ", step_angle_y*2); 
@@ -1021,7 +1051,33 @@ void TimerInterrupt( void ){
         } 
       }
       break;
-    case 20:          
+    case 20:    
+      if (log_flag && bufferIndex[writeBank] < BufferRecords) {
+        RecordType* rp = &buffer[writeBank][bufferIndex[writeBank]];
+        rp->log_time = millis();
+        rp->log_seq = seq;
+        rp->log_pattern = pattern;
+        rp->log_power = power;
+        rp->log_delta_count1 = delta_count1;
+        rp->log_total_count1 = total_count1;
+        rp->log_delta_count2 = delta_count2;
+        rp->log_total_count2 = total_count2;
+        rp->log_delta_count3 = delta_count3;
+        rp->log_total_count3 = total_count3;
+        rp->log_distance1 = distance1;
+        rp->log_distance2 = distance2;
+        rp->log_rssi_value = rssi_value;
+        rp->log_IMU_ax = accX;
+        rp->log_IMU_ay = accY;
+        rp->log_IMU_az = accZ;
+        rp->log_IMU_gx = gyroX;
+        rp->log_IMU_gy = gyroY;
+        rp->log_IMU_gz = gyroZ;
+        rp->log_IMU_temp = temp;
+        if (++bufferIndex[writeBank] >= BufferRecords) {
+            writeBank = !writeBank;
+        }
+      }      
       break;
     case 30:
       break;
@@ -1055,6 +1111,15 @@ void SerialRX(void) {
         rx_pattern = atoi(xbee_rx_buffer);
       } else if( tx_pattern == 2 ) {
         rx_val = atof(xbee_rx_buffer);
+      } else if( tx_pattern == 3 ) {
+        fname_buff  = (String)xbee_rx_buffer
+                +(String)(timeinfo.tm_year + 1900)
+                +"_"+(String)(timeinfo.tm_mon + 1)
+                +"_"+(String)timeinfo.tm_mday
+                +"_"+(String)timeinfo.tm_hour
+                +"_"+(String)timeinfo.tm_min
+                +".csv";
+        fname = fname_buff.c_str();
       }
       xbee_index = 0;
       
@@ -1064,6 +1129,20 @@ void SerialRX(void) {
         break;
         
       case 11:      
+        tx_pattern = 51;
+        rx_pattern = 51;
+        break;
+
+      case 51:      
+        file = SD.open(fname, FILE_APPEND); 
+        file.print("Angle");
+        file.print(",");
+        file.print("Moment-Y0");
+        file.print(",");
+        file.print("Moment-Y1");
+        file.print(",");
+        file.println("Moment-Total");
+        file.close();
         tx_pattern = 11;
         rx_pattern = 101;
         break;
@@ -1285,6 +1364,10 @@ void SerialTX(void) {
     case 2:
       break;
 
+    // Waiting Name
+    case 3:
+      break;
+
     case 11:
       Serial.printf(" Confirm to Start Sequence Step 2D+? -> ");
       tx_pattern = 2;
@@ -1303,6 +1386,11 @@ void SerialTX(void) {
     case 14:
       Serial.printf(" Confirm to Start Sequence Continuous 2D-? -> ");
       tx_pattern = 2;
+      break;
+
+    case 51:
+      Serial.printf(" Enter the experimental parameters -> ");
+      tx_pattern = 3;
       break;
 
     // Telemetry Mode
@@ -1818,10 +1906,10 @@ void targetAngleY1(float tang, float step) {
 void stepAngleY(float sang) {
 
   if(millis() - millis_buffer > STABLE_TIME - LOG_TIME) {
-    log_flag = true;
+    tel_flag = true;
   }
   if(millis() - millis_buffer > STABLE_TIME) {
-    log_flag = false;
+    tel_flag = false;
     millis_buffer = millis();    
     if( step_angle_y <= sang && (pattern == 14 || pattern == 25)) step_angle_y+=0.5;
     if( step_angle_y >= sang && (pattern == 15 || pattern == 24)) step_angle_y-=0.5;
