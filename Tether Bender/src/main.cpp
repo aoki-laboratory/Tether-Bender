@@ -1141,10 +1141,9 @@ void SerialRX(void) {
       } else if( tx_pattern == 2 ) {
         rx_val = atof(xbee_rx_buffer);
       } else if( tx_pattern == 3 ) {
-        fname_buff  = "/log/"
+        fname_buff = "/log/"
                 +(String)xbee_rx_buffer
-                +"-00";
-                +".csv";
+                +"-00.csv";
         Serial.println(fname_buff);
         fname = fname_buff.c_str();
         rx_pattern = 51;
