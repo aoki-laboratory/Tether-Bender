@@ -1143,11 +1143,6 @@ void SerialRX(void) {
       } else if( tx_pattern == 3 ) {
         fname_buff = "/log/"
                 +(String)atoi(xbee_rx_buffer)
-                +"_"+(String)(timeinfo.tm_year + 1900)
-                +"_"+(String)(timeinfo.tm_mon + 1)
-                +"_"+(String)timeinfo.tm_mday
-                +"_"+(String)timeinfo.tm_hour
-                +"_"+(String)timeinfo.tm_min
                 +".csv";
         Serial.println(fname_buff);
         fname = fname_buff.c_str();
