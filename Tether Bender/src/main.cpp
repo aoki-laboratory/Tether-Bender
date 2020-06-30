@@ -46,6 +46,8 @@
 #define I_TORQUE_TOLERANCE_Y 100
 #define ANGLE_TOLERANCE 1.0
 
+#define STEP_ANGLE 2
+
 #define YAXIS_MAX_ANGLE 45
 #define YAXIS_MIN_ANGLE -43
 
@@ -287,12 +289,15 @@ int iTimer50;
 
 // Log
 typedef struct {
+    long  log_time;
+    float log_target_angle_x;  
     float log_angle_x0;
     float log_angle_x1;
     float log_angle_x;
     float log_torque_x0;
     float log_torque_x1;
     float log_torque_x;
+    float log_target_angle_y;  
     float log_angle_y0;
     float log_angle_y1;
     float log_angle_y;    
@@ -420,6 +425,10 @@ void loop() {
     bufferIndex[readBank] = 0;
     file = SD.open(fname, FILE_APPEND);
     for (int i = 0; i < BufferRecords; i++) {
+        file.print(temp[i].log_time);
+        file.print(",");
+        file.print(temp[i].log_target_angle_x);
+        file.print(",");
         file.print(temp[i].log_angle_x0);
         file.print(",");
         file.print(temp[i].log_angle_x1);
@@ -431,6 +440,8 @@ void loop() {
         file.print(temp[i].log_torque_x0);
         file.print(",");
         file.print(temp[i].log_torque_x1);        
+        file.print(",");
+        file.print(temp[i].log_target_angle_y);
         file.print(",");
         file.print(temp[i].log_angle_y0);
         file.print(",");
@@ -1041,7 +1052,28 @@ void TimerInterrupt( void ){
     case 7:  
       hx711_flag = true;    
       break;
-    case 15:      
+    case 15:    
+      if (log_flag && bufferIndex[writeBank] < BufferRecords) {
+        RecordType* rp = &buffer[writeBank][bufferIndex[writeBank]];    
+        rp->log_time = millis();
+        rp->log_target_angle_x = step_angle_x*2;    
+        rp->log_angle_x0 = angle_can_x0;
+        rp->log_angle_x1 = angle_can_x1;
+        rp->log_angle_x = angle_x;
+        rp->log_torque_x = torque_x0 + torque_x1;
+        rp->log_torque_x0 = torque_x0;
+        rp->log_torque_x1 = torque_x1;
+        rp->log_target_angle_y = step_angle_y*2;   
+        rp->log_angle_y0 = angle_can_y0;
+        rp->log_angle_y1 = angle_can_y1;
+        rp->log_angle_y = angle_y;        
+        rp->log_torque_y = torque_y0 + torque_y1;
+        rp->log_torque_y0 = torque_y0;
+        rp->log_torque_y1 = torque_y1;
+        if (++bufferIndex[writeBank] >= BufferRecords) {
+            writeBank = !writeBank;
+        }
+      }     
       iTimer15 = 0;
       break;
     }
@@ -1089,24 +1121,7 @@ void TimerInterrupt( void ){
       }
       break;
     case 20:    
-      if (log_flag && bufferIndex[writeBank] < BufferRecords) {
-        RecordType* rp = &buffer[writeBank][bufferIndex[writeBank]];        
-        rp->log_angle_x0 = angle_can_x0;
-        rp->log_angle_x1 = angle_can_x1;
-        rp->log_angle_x = angle_x;
-        rp->log_torque_x = torque_x0 + torque_x1;
-        rp->log_torque_x0 = torque_x0;
-        rp->log_torque_x1 = torque_x1;
-        rp->log_angle_y0 = angle_can_y0;
-        rp->log_angle_y1 = angle_can_y1;
-        rp->log_angle_y = angle_y;        
-        rp->log_torque_y = torque_y0 + torque_y1;
-        rp->log_torque_y0 = torque_y0;
-        rp->log_torque_y1 = torque_y1;
-        if (++bufferIndex[writeBank] >= BufferRecords) {
-            writeBank = !writeBank;
-        }
-      }      
+         
       break;
     case 30:
       break;
@@ -1161,6 +1176,10 @@ void SerialRX(void) {
 
       case 51:      
         file = SD.open(fname, FILE_APPEND); 
+        file.print("Time");
+        file.print(",");
+        file.print("Target-Angle-X");
+        file.print(",");
         file.print("Angle-X0");
         file.print(",");
         file.print("Angle-X1");
@@ -1173,17 +1192,19 @@ void SerialRX(void) {
         file.print(",");        
         file.print("Moment-X1");        
         file.print(",");  
+        file.print("Target-Angle-Y");
+        file.print(",");
         file.print("Angle-Y0");
         file.print(",");
         file.print("Angle-Y1");
         file.print(",");
         file.print("Angle-Y");
         file.print(",");
-        file.println("Moment-Y");
+        file.print("Moment-Y");
         file.print(",");        
         file.print("Moment-Y0");
         file.print(",");        
-        file.print("Moment-Y1");        
+        file.println("Moment-Y1");        
         file.close();
         tx_pattern = 11;
         rx_pattern = 101;
@@ -1954,8 +1975,8 @@ void stepAngleY(float sang) {
   if(millis() - millis_buffer > STABLE_TIME) {
     tel_flag = false;
     millis_buffer = millis();    
-    if( step_angle_y <= sang && (pattern == 14 || pattern == 25)) step_angle_y+=0.5;
-    if( step_angle_y >= sang && (pattern == 15 || pattern == 24)) step_angle_y-=0.5;
+    if( step_angle_y <= sang && (pattern == 14 || pattern == 25)) step_angle_y+=STEP_ANGLE;
+    if( step_angle_y >= sang && (pattern == 15 || pattern == 24)) step_angle_y-=STEP_ANGLE;
   }
 
 }
